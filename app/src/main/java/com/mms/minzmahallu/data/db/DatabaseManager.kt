@@ -7,6 +7,8 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import java.io.File
 
+private val triggerEndRegex = Regex("""\bEND\s*;?\s*(?:--.*)?$""", RegexOption.IGNORE_CASE)
+
 /**
  * SQLite connection mirroring Electron better-sqlite3 layer.
  * Schema + seed from assets/sql, then numbered migrations.
@@ -125,7 +127,10 @@ class DatabaseManager(private val context: Context) {
             if (t.uppercase().startsWith("CREATE TRIGGER")) inTrigger = true
             buf.append(line).append('\n')
             if (inTrigger) {
-                if (t.uppercase() == "END;" || t.uppercase() == "END") {
+                // Triggers can be either multi-line or declared on a single line.
+                // Their body often contains a semicolon before END, so only close
+                // the statement on the trigger's terminating END token.
+                if (triggerEndRegex.containsMatchIn(t)) {
                     parts += buf.toString()
                     buf.clear()
                     inTrigger = false
