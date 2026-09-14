@@ -81,6 +81,7 @@ class DatabaseManager(private val context: Context) {
         }
 
         // If file existed before but lacks core tables, treat as corrupted fresh install
+        // Also recreate if bootstrappedTables is null (query failed) or not 3
         if (existedBefore && bootstrappedTables != 3L) {
             Log.w(TAG, "Bootstrapped tables=$bootstrappedTables, expected 3 – recreating DB")
             close()
@@ -93,9 +94,17 @@ class DatabaseManager(private val context: Context) {
 
         if (fresh) {
             Log.i(TAG, "Fresh install – loading schema+seed")
-            execScript(readAsset("sql/schema.sql"))
-            execScript(readAsset("sql/seed.sql"))
-            markAllMigrationsApplied()
+            try {
+                execScript(readAsset("sql/schema.sql"))
+                execScript(readAsset("sql/seed.sql"))
+                markAllMigrationsApplied()
+            } catch (e: Exception) {
+                Log.e(TAG, "Schema/seed load failed", e)
+                // Delete corrupted DB and rethrow to trigger recovery
+                close()
+                try { dbFile.delete() } catch (_: Exception) {}
+                throw e
+            }
         } else {
             applyPendingMigrations()
         }
@@ -309,6 +318,7 @@ class DatabaseManager(private val context: Context) {
     private fun applyPendingMigrations() {
         val applied = appliedVersions().toMutableSet()
         val names = context.assets.list("sql/migrations")?.sorted().orEmpty()
+        var migrationFailed = false
         for (n in names) {
             if (!n.endsWith(".sql") || n.startsWith("README")) continue
             val m = Regex("""V(\d+)_""").find(n) ?: continue
@@ -324,6 +334,7 @@ class DatabaseManager(private val context: Context) {
                 applied += ver
             } catch (e: Exception) {
                 Log.e(TAG, "Migration $n failed", e)
+                migrationFailed = true
                 // Continue — many migrations are additive IF NOT EXISTS
                 try {
                     run(
@@ -332,6 +343,10 @@ class DatabaseManager(private val context: Context) {
                     )
                 } catch (_: Exception) {}
             }
+        }
+        // If any migration failed, log it clearly so user knows DB may be incomplete
+        if (migrationFailed) {
+            Log.w(TAG, "One or more migrations failed – database may be incomplete")
         }
     }
 
