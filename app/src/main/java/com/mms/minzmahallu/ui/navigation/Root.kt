@@ -38,12 +38,13 @@ import kotlinx.coroutines.withContext
 @Composable
 fun MmsRoot(modifier: Modifier = Modifier) {
     val app = MmsApp.instance
-    val repo = app.repo
+    val repo = try { app.repo } catch (e: Throwable) { null }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var splash by remember { mutableStateOf(true) }
-    var user by remember { mutableStateOf(repo.auth.currentUser) }
+    var initError by remember { mutableStateOf<Throwable?>(app.initError) }
+    var user by remember { mutableStateOf(try { repo?.auth?.currentUser } catch (_: Exception) { null }) }
     var needsSetup by remember { mutableStateOf(false) }
     var dest by remember { mutableStateOf(Dest.Dashboard) }
     var drawerOpen by remember { mutableStateOf(false) }
@@ -55,19 +56,69 @@ fun MmsRoot(modifier: Modifier = Modifier) {
     }
 
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            needsSetup = repo.auth.needsInitialSetup()
-            val s = repo.settingsLoad()
-            Format.currencySymbol = Format.str(s, "currency_symbol").ifBlank { "₹" }
-            val theme = Format.str(s, "theme")
-            withContext(Dispatchers.Main) {
-                MmsThemeController.setDark(theme == "dark")
-                val l = Format.str(s, "language")
-                if (l in listOf("en", "ml")) I18n.setLang(ctx, l)
+        // Guard against repo not ready – show error instead of crashing
+        if (repo == null) {
+            initError = app.initError ?: IllegalStateException("Database not initialised")
+            kotlinx.coroutines.delay(600)
+            splash = false
+            return@LaunchedEffect
+        }
+        try {
+            val setup: Boolean
+            val s: Map<String, Any?>
+            withContext(Dispatchers.IO) {
+                setup = try { repo.auth.needsInitialSetup() } catch (e: Exception) {
+                    android.util.Log.e("MmsRoot", "needsInitialSetup failed", e)
+                    false
+                }
+                s = try { repo.settingsLoad() } catch (e: Exception) {
+                    android.util.Log.e("MmsRoot", "settingsLoad failed", e)
+                    emptyMap()
+                }
+                Format.currencySymbol = Format.str(s, "currency_symbol").ifBlank { "₹" }
             }
+            needsSetup = setup
+            val theme = Format.str(s, "theme")
+            // theme / lang must run on Main
+            MmsThemeController.setDark(theme == "dark")
+            val l = Format.str(s, "language")
+            if (l in listOf("en", "ml")) I18n.setLang(ctx, l)
+        } catch (e: Exception) {
+            android.util.Log.e("MmsRoot", "init failed", e)
+            initError = e
+            toast(e.message ?: "Init failed", ToastMsg.Kind.Error)
         }
         kotlinx.coroutines.delay(1600)
         splash = false
+    }
+
+    val c = C()
+    // If DB failed to init, show a non-crash error screen instead of Login loops
+    if (initError != null && repo == null) {
+        Box(modifier.background(c.bodyBg)) {
+            Column(
+                Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                androidx.compose.foundation.text.BasicText(
+                    "Database error",
+                    style = MmsType.title.copy(color = c.cRose, fontWeight = FontWeight.Bold)
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.foundation.text.BasicText(
+                    (initError?.message ?: "Failed to open database").take(300),
+                    style = MmsType.bodySm.copy(color = c.mut)
+                )
+                Spacer(Modifier.height(12.dp))
+                androidx.compose.foundation.text.BasicText(
+                    "Clear app data and reopen. Settings → Apps → Minz Mahallu → Storage → Clear Data.",
+                    style = MmsType.caption.copy(color = c.fnt)
+                )
+            }
+            ToastHost(toasts.toList()) { id -> toasts.removeAll { it.id == id } }
+        }
+        return
     }
 
     Box(modifier.background(C().bodyBg)) {

@@ -16,10 +16,15 @@ class AuthService(private val db: DatabaseManager) {
     )
 
     fun needsInitialSetup(): Boolean {
-        val count = (db.scalar("SELECT COUNT(*) FROM users") as? Number)?.toLong() ?: 0L
-        if (count == 0L) return true
-        if (count == 1L && seededAdmin() != null) return true
-        return false
+        return try {
+            val count = (db.scalar("SELECT COUNT(*) FROM users") as? Number)?.toLong() ?: 0L
+            if (count == 0L) return true
+            if (count == 1L && seededAdmin() != null) return true
+            false
+        } catch (e: Exception) {
+            android.util.Log.w("Auth", "needsInitialSetup failed, assuming setup needed: ${e.message}")
+            true
+        }
     }
 
     private fun seededAdmin(): Map<String, Any?>? {

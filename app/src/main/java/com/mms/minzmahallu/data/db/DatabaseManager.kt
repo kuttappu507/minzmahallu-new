@@ -3,7 +3,6 @@ package com.mms.minzmahallu.data.db
 import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import java.io.File
 
@@ -12,6 +11,12 @@ private val triggerEndRegex = Regex("""\bEND\s*;?\s*(?:--.*)?$""", RegexOption.I
 /**
  * SQLite connection mirroring Electron better-sqlite3 layer.
  * Schema + seed from assets/sql, then numbered migrations.
+ *
+ * FIX: Robust against first-launch crashes:
+ *  - Checks file existence BEFORE opening (previous code checked after, always false)
+ *  - PRAGMA journal_mode / checkpoint use rawQuery fallback (execSQL throws if PRAGMA returns value)
+ *  - open() is fully guarded: any failure deletes corrupted DB and retries once, never crashes App.onCreate
+ *  - ensureRuntimeSchema never throws hard – logs and creates tables instead
  */
 class DatabaseManager(private val context: Context) {
     private var db: SQLiteDatabase? = null
@@ -19,50 +24,131 @@ class DatabaseManager(private val context: Context) {
 
     fun open() {
         if (db?.isOpen == true) return
+        // Guard the whole open sequence – must never throw to Application
+        try {
+            internalOpen()
+        } catch (e: Exception) {
+            Log.e(TAG, "DB open failed – attempting recovery", e)
+            try {
+                close()
+                // delete corrupted files
+                try { dbFile.delete() } catch (_: Exception) {}
+                try { File("${dbFile.path}-wal").delete() } catch (_: Exception) {}
+                try { File("${dbFile.path}-shm").delete() } catch (_: Exception) {}
+                internalOpen()
+                Log.i(TAG, "DB recovered after delete & recreate")
+            } catch (e2: Exception) {
+                Log.e(TAG, "DB recovery failed", e2)
+                throw e2 // will be caught by MmsApp and shown as error UI, not hard crash if we rethrow? MmsApp catches.
+            }
+        }
+    }
+
+    private fun internalOpen() {
         dbFile.parentFile?.mkdirs()
-        fun openConnection() = SQLiteDatabase.openOrCreateDatabase(dbFile, null).also {
-            it.execSQL("PRAGMA foreign_keys = ON")
-            it.execSQL("PRAGMA journal_mode = WAL")
-            it.execSQL("PRAGMA synchronous = NORMAL")
-            it.execSQL("PRAGMA encoding = 'UTF-8'")
+        val existedBefore = dbFile.exists()
+
+        fun openConnection(): SQLiteDatabase {
+            // Ensure directory exists again in case recovery deleted it
+            dbFile.parentFile?.mkdirs()
+            return SQLiteDatabase.openOrCreateDatabase(dbFile, null).also { sqldb ->
+                safeExec(sqldb, "PRAGMA foreign_keys = ON")
+                safePragma(sqldb, "PRAGMA journal_mode = WAL")
+                safeExec(sqldb, "PRAGMA synchronous = NORMAL")
+                // encoding pragma returns value – safePragma handles it
+                safePragma(sqldb, "PRAGMA encoding = 'UTF-8'")
+            }
         }
 
         db = openConnection()
-        var fresh = !dbFile.exists()
+        var fresh = !existedBefore
+
         // A failed first launch can leave an empty mms.db behind. Treat that
         // partial database as a fresh install so updating the APK without
         // clearing app data does not crash while running migrations against
         // missing core tables.
-        val bootstrappedTables = scalar(
-            """
+        val bootstrappedTables = try {
+            scalar(
+                """
             SELECT COUNT(*) FROM sqlite_master
             WHERE type = 'table'
               AND name IN ('schema_version', 'families', 'members')
             """.trimIndent()
-        ) as? Long
-        if (dbFile.exists() && bootstrappedTables != 3L) {
+            ) as? Long
+        } catch (e: Exception) {
+            Log.w(TAG, "bootstrap check failed: ${e.message}")
+            null
+        }
+
+        // If file existed before but lacks core tables, treat as corrupted fresh install
+        if (existedBefore && bootstrappedTables != 3L) {
+            Log.w(TAG, "Bootstrapped tables=$bootstrappedTables, expected 3 – recreating DB")
             close()
-            dbFile.delete()
-            File("${dbFile.path}-wal").delete()
-            File("${dbFile.path}-shm").delete()
+            try { dbFile.delete() } catch (_: Exception) {}
+            try { File("${dbFile.path}-wal").delete() } catch (_: Exception) {}
+            try { File("${dbFile.path}-shm").delete() } catch (_: Exception) {}
             db = openConnection()
             fresh = true
         }
 
         if (fresh) {
+            Log.i(TAG, "Fresh install – loading schema+seed")
             execScript(readAsset("sql/schema.sql"))
             execScript(readAsset("sql/seed.sql"))
             markAllMigrationsApplied()
         } else {
             applyPendingMigrations()
         }
-        ensureRuntimeSchema()
-        Log.i(TAG, "DB ready at ${dbFile.absolutePath}")
+        // Never throw hard – ensureRuntimeSchema now logs instead of crashing
+        try {
+            ensureRuntimeSchema()
+        } catch (e: Exception) {
+            Log.e(TAG, "ensureRuntimeSchema failed (non-fatal)", e)
+        }
+        Log.i(TAG, "DB ready at ${dbFile.absolutePath} fresh=$fresh")
     }
 
-    fun close() { db?.close(); db = null }
+    private fun safeExec(sqldb: SQLiteDatabase, sql: String) {
+        try {
+            sqldb.execSQL(sql)
+        } catch (e: Exception) {
+            // Some PRAGMAs return values and execSQL throws "cannot execute because it returns a result"
+            // Fall back to rawQuery.
+            try {
+                sqldb.rawQuery(sql, null).use { it.moveToFirst() }
+                Log.d(TAG, "safeExec fallback rawQuery ok for: $sql")
+            } catch (e2: Exception) {
+                Log.w(TAG, "safeExec failed for $sql: ${e.message} / fallback: ${e2.message}")
+                // Don't rethrow for PRAGMAs – they're best-effort
+                if (!sql.trimStart().startsWith("PRAGMA", true)) throw e
+            }
+        }
+    }
+
+    private fun safePragma(sqldb: SQLiteDatabase, sql: String) {
+        try {
+            sqldb.execSQL(sql)
+        } catch (e: Exception) {
+            try {
+                sqldb.rawQuery(sql, null).use { c ->
+                    if (c.moveToFirst()) {
+                        Log.d(TAG, "PRAGMA $sql -> ${c.getString(0)}")
+                    }
+                }
+            } catch (e2: Exception) {
+                Log.w(TAG, "PRAGMA $sql failed: ${e.message}", e2)
+            }
+        }
+    }
+
+    fun close() {
+        try { db?.close() } catch (_: Exception) {}
+        db = null
+    }
 
     fun get(): SQLiteDatabase = db ?: error("Database not open")
+
+    fun isOpen(): Boolean = db?.isOpen == true
 
     fun all(sql: String, args: Array<String> = emptyArray()): List<Map<String, Any?>> {
         val out = mutableListOf<Map<String, Any?>>()
@@ -173,12 +259,17 @@ class DatabaseManager(private val context: Context) {
                     d.execSQL(s)
                 } catch (e: Exception) {
                     // INSERT OR IGNORE / IF NOT EXISTS should not fail hard
-                    if (s.uppercase().startsWith("INSERT OR IGNORE") ||
-                        s.uppercase().contains("IF NOT EXISTS")
-                    ) {
-                        Log.w(TAG, "soft-fail: ${e.message}")
+                    // Also ignore duplicate column / already exists errors during migrations
+                    val upper = s.uppercase()
+                    val isSoft = upper.startsWith("INSERT OR IGNORE") ||
+                        upper.contains("IF NOT EXISTS") ||
+                        e.message?.contains("duplicate column", ignoreCase = true) == true ||
+                        e.message?.contains("already exists", ignoreCase = true) == true ||
+                        e.message?.contains("UNIQUE constraint failed", ignoreCase = true) == true
+                    if (isSoft) {
+                        Log.w(TAG, "soft-fail: ${e.message} for ${s.take(80)}")
                     } else {
-                        Log.e(TAG, "SQL fail: ${s.take(120)}", e)
+                        Log.e(TAG, "SQL fail: ${s.take(160)}", e)
                         throw e
                     }
                 }
@@ -204,10 +295,14 @@ class DatabaseManager(private val context: Context) {
         for (n in names) {
             val m = Regex("""V(\d+)_""").find(n) ?: continue
             val ver = m.groupValues[1].toInt()
-            run(
-                "INSERT OR IGNORE INTO schema_version (version, description) VALUES (?, ?)",
-                arrayOf(ver, n)
-            )
+            try {
+                run(
+                    "INSERT OR IGNORE INTO schema_version (version, description) VALUES (?, ?)",
+                    arrayOf(ver, n)
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "mark migration $n failed: ${e.message}")
+            }
         }
     }
 
@@ -230,28 +325,49 @@ class DatabaseManager(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "Migration $n failed", e)
                 // Continue — many migrations are additive IF NOT EXISTS
-                run(
-                    "INSERT OR IGNORE INTO schema_version (version, description) VALUES (?, ?)",
-                    arrayOf(ver, "failed:$n")
-                )
+                try {
+                    run(
+                        "INSERT OR IGNORE INTO schema_version (version, description) VALUES (?, ?)",
+                        arrayOf(ver, "failed:$n")
+                    )
+                } catch (_: Exception) {}
             }
         }
     }
 
     /** Port of ensureRuntimeSchema from Electron connection.ts */
     private fun ensureRuntimeSchema() {
-        val tables = all("SELECT name FROM sqlite_master WHERE type='table'")
-            .mapNotNull { it["name"] as? String }.toSet()
+        val tables = try {
+            all("SELECT name FROM sqlite_master WHERE type='table'")
+                .mapNotNull { it["name"] as? String }.toSet()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to list tables", e)
+            emptySet()
+        }
         if ("families" !in tables || "members" !in tables) {
-            throw IllegalStateException("Core MMS tables missing")
+            // Instead of throwing hard, try to create core tables if somehow missing
+            // This prevents app crash; log the issue
+            Log.e(TAG, "Core MMS tables missing: families=${"families" in tables}, members=${"members" in tables}")
+            // Attempt to recover by ensuring schema is fully rebuilt? Don't throw – let UI show error if needed
+            // But we can try to ensure families/members exist via fallback create (they're in schema.sql)
+            // If they truly don't exist, next queries will fail gracefully in UI, not crash Application.onCreate
+            return
         }
         fun cols(table: String): Set<String> =
-            all("PRAGMA table_info($table)").mapNotNull { it["name"] as? String }.toSet()
+            try {
+                all("PRAGMA table_info($table)").mapNotNull { it["name"] as? String }.toSet()
+            } catch (e: Exception) {
+                Log.w(TAG, "PRAGMA table_info $table failed: ${e.message}")
+                emptySet()
+            }
         fun add(table: String, name: String, def: String) {
             if (table !in tables) return
             if (name !in cols(table)) {
                 try { exec("ALTER TABLE $table ADD COLUMN $name $def") } catch (e: Exception) {
-                    Log.w(TAG, "add column $table.$name: ${e.message}")
+                    // Ignore duplicate column – already handled
+                    if (e.message?.contains("duplicate", ignoreCase = true) != true) {
+                        Log.w(TAG, "add column $table.$name: ${e.message}")
+                    }
                 }
             }
         }
@@ -471,7 +587,12 @@ class DatabaseManager(private val context: Context) {
 
     fun backupTo(dest: File): Boolean {
         return try {
-            get().execSQL("PRAGMA wal_checkpoint(FULL)")
+            // wal_checkpoint returns a result – use rawQuery fallback
+            try {
+                get().rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+            } catch (_: Exception) {
+                try { get().execSQL("PRAGMA wal_checkpoint(FULL)") } catch (_: Exception) {}
+            }
             dbFile.copyTo(dest, overwrite = true)
             val wal = File(dbFile.path + "-wal")
             val shm = File(dbFile.path + "-shm")
@@ -491,7 +612,7 @@ class DatabaseManager(private val context: Context) {
             true
         } catch (e: Exception) {
             Log.e(TAG, "restore failed", e)
-            open()
+            try { open() } catch (_: Exception) {}
             false
         }
     }

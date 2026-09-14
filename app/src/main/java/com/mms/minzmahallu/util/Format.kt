@@ -1,19 +1,25 @@
 package com.mms.minzmahallu.util
 
 import java.text.NumberFormat
-import java.time.LocalDate
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 object Format {
-    private val ist: ZoneId = ZoneId.of("Asia/Kolkata")
-    private val df = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+    // Asia/Kolkata – use TimeZone API compatible with API 26 without desugaring
+    private val ist: TimeZone = TimeZone.getTimeZone("Asia/Kolkata")
+    private val df = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = ist }
+    private val monthFmt = SimpleDateFormat("yyyy-MM", Locale.US).apply { timeZone = ist }
     var currencySymbol: String = "₹"
 
-    fun today(): String = LocalDate.now(ist).format(df)
-    fun year(): Int = LocalDate.now(ist).year
-    fun monthKey(): String = LocalDate.now(ist).format(DateTimeFormatter.ofPattern("yyyy-MM"))
+    fun today(): String = synchronized(df) { df.format(Date()) }
+    fun year(): Int {
+        val c = Calendar.getInstance(ist, Locale.US)
+        return c.get(Calendar.YEAR)
+    }
+    fun monthKey(): String = synchronized(monthFmt) { monthFmt.format(Date()) }
 
     fun money(amount: Double?, symbol: String = currencySymbol): String {
         val n = amount ?: 0.0
