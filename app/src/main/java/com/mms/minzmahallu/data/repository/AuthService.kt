@@ -11,8 +11,8 @@ class AuthService(private val db: DatabaseManager) {
         private set
 
     private val seededHashes = setOf(
-        "pbkdf2_sha256$200000$c2FsdC1mb3ItbW1zLWFkbWluLXVzZXI=$dJvtGdhlhx7H/9KuwAZs4U/j/DjiiDA88txKk9SnqTU=",
-        "pbkdf2_sha256$200000$zRLKI0xyc2sYKBzQaWXl6w==$qHO4yvos81/Oah+ECzVbh1ZHPz3rEhRHOJT2criWCPg="
+        """pbkdf2_sha256${'$'}200000${'$'}c2FsdC1mb3ItbW1zLWFkbWluLXVzZXI=${'$'}dJvtGdhlhx7H/9KuwAZs4U/j/DjiiDA88txKk9SnqTU=""",
+        """pbkdf2_sha256${'$'}200000${'$'}zRLKI0xyc2sYKBzQaWXl6w==${'$'}qHO4yvos81/Oah+ECzVbh1ZHPz3rEhRHOJT2criWCPg="""
     )
 
     fun needsInitialSetup(): Boolean {

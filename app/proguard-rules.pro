@@ -1,2 +1,7 @@
 -keep class com.mms.minzmahallu.** { *; }
 -dontwarn com.tom_roush.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.apache.**
+-dontwarn javax.**
+-dontwarn java.awt.**
+-ignorewarnings
