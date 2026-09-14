@@ -93,8 +93,13 @@ fun MmsRoot(modifier: Modifier = Modifier) {
     }
 
     val c = C()
-    // If DB failed to init, show a non-crash error screen instead of Login loops
-    if (initError != null && repo == null) {
+    // If the repository is unavailable (DB failed to init), show a non-crash error
+    // screen instead of Login loops. This early return is also what makes every
+    // `repo` usage below compile: after it, Kotlin smart-casts the local `repo`
+    // val to a non-null MmsRepository — including inside the lambdas passed to
+    // LoginScreen and AppShell (a captured val can't be re-assigned, so the
+    // smart cast stays valid there).
+    if (repo == null) {
         Box(modifier.background(c.bodyBg)) {
             Column(
                 Modifier.fillMaxSize().padding(16.dp),
