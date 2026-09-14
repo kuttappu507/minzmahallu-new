@@ -238,7 +238,7 @@ private fun AppShell(
                 }
 
                 // Drawer overlay
-                AnimatedVisibility(
+                androidx.compose.animation.AnimatedVisibility(
                     visible = drawerOpen,
                     enter = fadeIn(tween(160)),
                     exit = fadeOut(tween(140))
@@ -250,7 +250,7 @@ private fun AppShell(
                             .mmsClickable(onClick = onToggleDrawer)
                     )
                 }
-                AnimatedVisibility(
+                androidx.compose.animation.AnimatedVisibility(
                     visible = drawerOpen,
                     enter = slideInHorizontally(tween(260)) { -it } + fadeIn(),
                     exit = slideOutHorizontally(tween(200)) { -it } + fadeOut()
