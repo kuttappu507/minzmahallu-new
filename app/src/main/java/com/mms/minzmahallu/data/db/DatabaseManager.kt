@@ -20,13 +20,35 @@ class DatabaseManager(private val context: Context) {
     fun open() {
         if (db?.isOpen == true) return
         dbFile.parentFile?.mkdirs()
-        val fresh = !dbFile.exists()
-        db = SQLiteDatabase.openOrCreateDatabase(dbFile, null).also {
+        fun openConnection() = SQLiteDatabase.openOrCreateDatabase(dbFile, null).also {
             it.execSQL("PRAGMA foreign_keys = ON")
             it.execSQL("PRAGMA journal_mode = WAL")
             it.execSQL("PRAGMA synchronous = NORMAL")
             it.execSQL("PRAGMA encoding = 'UTF-8'")
         }
+
+        db = openConnection()
+        var fresh = !dbFile.exists()
+        // A failed first launch can leave an empty mms.db behind. Treat that
+        // partial database as a fresh install so updating the APK without
+        // clearing app data does not crash while running migrations against
+        // missing core tables.
+        val bootstrappedTables = scalar(
+            """
+            SELECT COUNT(*) FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN ('schema_version', 'families', 'members')
+            """.trimIndent()
+        ) as? Long
+        if (dbFile.exists() && bootstrappedTables != 3L) {
+            close()
+            dbFile.delete()
+            File("${dbFile.path}-wal").delete()
+            File("${dbFile.path}-shm").delete()
+            db = openConnection()
+            fresh = true
+        }
+
         if (fresh) {
             execScript(readAsset("sql/schema.sql"))
             execScript(readAsset("sql/seed.sql"))
