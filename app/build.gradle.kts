@@ -16,12 +16,20 @@ android {
         versionName = "2.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        // Ensure SQLite / pdfbox native libs packaged correctly
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Keep minify OFF until launch is proven stable – then re-enable with proper keeps
+            // The previous isMinifyEnabled=true with an incomplete proguard file stripped Compose/SQLite classes
+            // and was the likely cause of "installs but fails to open" on release builds.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            // Use debug signing for CI so assembleRelease produces an installable APK
+            // (Play Store release should override with a real keystore via env)
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -30,12 +38,16 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            isMinifyEnabled = false
+            // shrinkResources also false for debug – faster builds
         }
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Required for java.time desugaring if Format ever uses it again, and for other libs
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions {
         jvmTarget = "17"
@@ -46,6 +58,8 @@ android {
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        resources.excludes += "/META-INF/DEPENDENCIES"
+        jniLibs.useLegacyPackaging = false
     }
     lint {
         checkReleaseBuilds = false
@@ -54,6 +68,9 @@ android {
 }
 
 dependencies {
+    // Desugaring for java.time / nio on minSdk 26 (safe to include)
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
