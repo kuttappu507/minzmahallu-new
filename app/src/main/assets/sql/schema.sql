@@ -3,10 +3,12 @@
 -- Version: 1.0.0
 -- Engine: SQLite 3.35+ (required for RETURNING clause)
 -- ============================================================================
+-- Note: PRAGMA statements are executed via safeExec() which handles PRAGMAs
+-- that return values (like journal_mode, encoding) using rawQuery instead of execSQL.
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
-PRAGMA encoding = 'UTF-8';
+-- PRAGMA encoding is intentionally omitted - UTF-8 is the default and cannot be changed after DB creation
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,

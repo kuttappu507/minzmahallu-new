@@ -55,8 +55,7 @@ class DatabaseManager(private val context: Context) {
                 safeExec(sqldb, "PRAGMA foreign_keys = ON")
                 safePragma(sqldb, "PRAGMA journal_mode = WAL")
                 safeExec(sqldb, "PRAGMA synchronous = NORMAL")
-                // encoding pragma returns value – safePragma handles it
-                safePragma(sqldb, "PRAGMA encoding = 'UTF-8'")
+                // encoding pragma removed - UTF-8 is the default and cannot be changed after DB creation
             }
         }
 
@@ -265,7 +264,8 @@ class DatabaseManager(private val context: Context) {
                 val s = p.trim().trimEnd(';').trim()
                 if (s.isEmpty()) continue
                 try {
-                    d.execSQL(s)
+                    // Use safeExec for all statements to handle PRAGMAs that return values
+                    safeExec(d, s)
                 } catch (e: Exception) {
                     // INSERT OR IGNORE / IF NOT EXISTS should not fail hard
                     // Also ignore duplicate column / already exists errors during migrations
