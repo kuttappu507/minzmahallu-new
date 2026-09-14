@@ -442,16 +442,12 @@ fun GenericCrudScreen(
             items(rows, key = { Format.long(it, "id") }) { row ->
                 MmsCard(onClick = {
                     editId = Format.long(row, "id")
-                    fields = prefill(row).toMutableMap().ifEmpty {
-                        formFields.associate { (label, key) ->
-                            key to Format.str(row, key.replace(Regex("([A-Z])"), "_$1").lowercase().trim('_').ifBlank { key })
-                        }.toMutableMap()
-                    }
-                    // better prefill attempt
+                    val m = prefill(row).toMutableMap()
                     formFields.forEach { (_, key) ->
                         val snake = key.replace(Regex("([a-z])([A-Z])"), "$1_$2").lowercase()
-                        if (fields[key].isNullOrBlank()) fields[key] = Format.str(row, snake).ifBlank { Format.str(row, key) }
+                        if (m[key].isNullOrBlank()) m[key] = Format.str(row, snake).ifBlank { Format.str(row, key) }
                     }
+                    fields = m
                     show = true
                 }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -620,6 +616,7 @@ fun GenericCrudScreen(
                                 "approve" -> repo.welfareApprove(actionId!!, actionAmount.toDoubleOrNull() ?: 0.0, actionReason, Format.today())
                                 "reject" -> repo.welfareReject(actionId!!, actionReason)
                                 "disburse" -> repo.welfareDisburse(actionId!!, actionReason, adminPwd)
+                                else -> Unit
                             }
                         }
                         actionId = null; reload(); toast("Done", ToastMsg.Kind.Success)
