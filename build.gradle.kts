@@ -4,12 +4,29 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
 }
 
-// CI helper: surface Kotlin compiler errors as GitHub annotations.
+// CI helper: surface Kotlin compiler + Android resource linking (aapt2) errors as GitHub annotations.
 if (System.getenv("GITHUB_ACTIONS") == "true") {
     val matcher = layout.buildDirectory.file("kotlin-matcher.json").get().asFile
     matcher.parentFile.mkdirs()
     matcher.writeText(
-        """{"problemMatcher":[{"owner":"kotlin-compiler","pattern":[{"regexp":"^e: file://(.+?):(\\d+):(\\d+) (.+)$","file":1,"line":2,"column":3,"message":4}]}]}"""
+        """
+        {
+          "problemMatcher": [
+            {
+              "owner": "kotlin-compiler",
+              "pattern": [
+                {"regexp": "^e: file://(.+?):(\\d+):(\\d+) (.+)$", "file": 1, "line": 2, "column": 3, "message": 4}
+              ]
+            },
+            {
+              "owner": "android-aapt2",
+              "pattern": [
+                {"regexp": "^\\s*ERROR:([^:]+):(\\d+):(\\d+): error: (.+)$", "file": 1, "line": 2, "column": 3, "message": 4}
+              ]
+            }
+          ]
+        }
+        """.trimIndent()
     )
     println("::add-matcher::${matcher.absolutePath}")
 }
