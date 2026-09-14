@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Zero Material Design — pure window background only -->
-    <!-- Use DayNight parent for broader OEM compatibility; still no Material Components -->
-    <style name="Theme.MinzMahallu" parent="android:Theme.DeviceDefault.DayNight.NoActionBar">
+    <!--
+      Parent note: android:Theme.DeviceDefault.DayNight.NoActionBar DOES NOT EXIST in AOSP
+      (verified against android15-release / compileSdk 35), which made aapt2 fail resource
+      linking with "resource style/... not found" and broke the CI build. Dark/light mode
+      is handled entirely by Compose (MmsTheme + MmsThemeController), so the plain
+      DeviceDefault.NoActionBar parent is the correct choice.
+    -->
+    <style name="Theme.MinzMahallu" parent="android:Theme.DeviceDefault.NoActionBar">
         <item name="android:statusBarColor">#0d9488</item>
         <item name="android:navigationBarColor">#f0f3f6</item>
         <item name="android:windowBackground">#f0f3f6</item>
