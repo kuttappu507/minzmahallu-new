@@ -1,0 +1,2 @@
+-keep class com.mms.minzmahallu.** { *; }
+-dontwarn com.tom_roush.**
