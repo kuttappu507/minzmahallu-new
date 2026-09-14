@@ -7,6 +7,8 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import java.io.File
 
+private val triggerEndRegex = Regex("""\bEND\s*;?\s*(?:--.*)?$""", RegexOption.IGNORE_CASE)
+
 /**
  * SQLite connection mirroring Electron better-sqlite3 layer.
  * Schema + seed from assets/sql, then numbered migrations.
@@ -18,13 +20,35 @@ class DatabaseManager(private val context: Context) {
     fun open() {
         if (db?.isOpen == true) return
         dbFile.parentFile?.mkdirs()
-        val fresh = !dbFile.exists()
-        db = SQLiteDatabase.openOrCreateDatabase(dbFile, null).also {
+        fun openConnection() = SQLiteDatabase.openOrCreateDatabase(dbFile, null).also {
             it.execSQL("PRAGMA foreign_keys = ON")
             it.execSQL("PRAGMA journal_mode = WAL")
             it.execSQL("PRAGMA synchronous = NORMAL")
             it.execSQL("PRAGMA encoding = 'UTF-8'")
         }
+
+        db = openConnection()
+        var fresh = !dbFile.exists()
+        // A failed first launch can leave an empty mms.db behind. Treat that
+        // partial database as a fresh install so updating the APK without
+        // clearing app data does not crash while running migrations against
+        // missing core tables.
+        val bootstrappedTables = scalar(
+            """
+            SELECT COUNT(*) FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN ('schema_version', 'families', 'members')
+            """.trimIndent()
+        ) as? Long
+        if (dbFile.exists() && bootstrappedTables != 3L) {
+            close()
+            dbFile.delete()
+            File("${dbFile.path}-wal").delete()
+            File("${dbFile.path}-shm").delete()
+            db = openConnection()
+            fresh = true
+        }
+
         if (fresh) {
             execScript(readAsset("sql/schema.sql"))
             execScript(readAsset("sql/seed.sql"))
@@ -125,7 +149,10 @@ class DatabaseManager(private val context: Context) {
             if (t.uppercase().startsWith("CREATE TRIGGER")) inTrigger = true
             buf.append(line).append('\n')
             if (inTrigger) {
-                if (t.uppercase() == "END;" || t.uppercase() == "END") {
+                // Triggers can be either multi-line or declared on a single line.
+                // Their body often contains a semicolon before END, so only close
+                // the statement on the trigger's terminating END token.
+                if (triggerEndRegex.containsMatchIn(t)) {
                     parts += buf.toString()
                     buf.clear()
                     inTrigger = false
