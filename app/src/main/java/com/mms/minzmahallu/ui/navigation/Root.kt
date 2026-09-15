@@ -1,7 +1,6 @@
 package com.mms.minzmahallu.ui.navigation
 
 import androidx.compose.animation.*
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -550,8 +549,6 @@ private fun SideDrawer(
                 danger = true,
                 icon = "⎋"
             )
-        }
-            }
         }
     }
 }
