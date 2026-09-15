@@ -1,197 +1,616 @@
 package com.mms.minzmahallu.ui.screens
 
-import android.content.Context
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.mms.minzmahallu.MmsApp
-import com.mms.minzmahallu.data.model.PageResult
 import com.mms.minzmahallu.data.model.ToastMsg
 import com.mms.minzmahallu.i18n.I18n
 import com.mms.minzmahallu.ui.components.*
 import com.mms.minzmahallu.ui.theme.*
 import com.mms.minzmahallu.util.Format
+import com.mms.minzmahallu.util.PdfUtil
+import com.mms.minzmahallu.util.ShareUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
+
+// ---------------------------------------------------------------- scaffold
 
 @Composable
 fun ModuleScaffold(
     title: String,
     subtitle: String,
     filters: List<String> = listOf("All"),
-    selectedFilter: String,
-    onFilter: (String) -> Unit,
-    search: String,
-    onSearch: (String) -> Unit,
+    selectedFilter: String = "All",
+    onFilter: (String) -> Unit = {},
+    search: String? = null,
+    onSearch: ((String) -> Unit)? = null,
     onAdd: (() -> Unit)? = null,
     addLabel: String = I18n.t("action_save"),
+    loading: Boolean = false,
     extraActions: @Composable RowScope.() -> Unit = {},
     content: @Composable () -> Unit,
 ) {
-    val c = C()
     Column(Modifier.fillMaxSize()) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp)) {
             PageHeader(title, subtitle, T()) {
                 extraActions()
-                if (onAdd != null) MmsButton(addLabel, onAdd, small = true)
+                if (onAdd != null) MmsButton(addLabel, onAdd, small = true, icon = G.PLUS)
             }
-            SearchField(search, onSearch, Modifier.fillMaxWidth())
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                filters.forEach { f ->
-                    FilterChip(f, f == selectedFilter, { onFilter(f) })
+            if (search != null && onSearch != null) {
+                SearchField(search, onSearch, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+            }
+            if (filters.size > 1 || (filters.size == 1 && filters[0] != "All")) {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    filters.forEach { f ->
+                        FilterChip(f, f == selectedFilter, { onFilter(f) })
+                    }
                 }
+                Spacer(Modifier.height(10.dp))
             }
         }
-        Box(Modifier.fillMaxSize().padding(horizontal = 16.dp)) { content() }
+        Box(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            if (loading) LoadingList() else content()
+        }
     }
 }
 
+// ---------------------------------------------------------------- receipts
+
+/** Receipt detail + PDF export + share + WhatsApp delivery. Shared by all money modules. */
 @Composable
-fun FamiliesScreen(toast: (String, ToastMsg.Kind) -> Unit) {
+fun ReceiptDialog(
+    title: String,
+    receiptNo: String,
+    rows: List<Pair<String, String>>,
+    messageText: String,
+    waPhone: String,
+    onDismiss: () -> Unit,
+    toast: (String, ToastMsg.Kind) -> Unit,
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val repo = MmsApp.instance.repo
+    var busy by remember { mutableStateOf(false) }
+    val canWa = ShareUtil.normalizePhone(waPhone) != null
+
+    fun makePdf(): kotlinx.coroutines.Job = scope.launch {
+        busy = true
+        try {
+            val s = withContext(Dispatchers.IO) { repo.settingsLoad() }
+            val org = listOf(
+                Format.str(s, "mahallu_name").ifBlank { "Minz Mahallu" },
+                listOf(Format.str(s, "village"), Format.str(s, "panchayath"), Format.str(s, "district")).filter { it.isNotBlank() }.joinToString(", "),
+                Format.str(s, "phone")
+            ).filter { it.isNotBlank() }
+            val file = withContext(Dispatchers.IO) {
+                PdfUtil.receiptPdf(ctx, title, org, rows, null, "receipt-$receiptNo.pdf")
+            }
+            ShareUtil.shareFile(ctx, file, "application/pdf", "Share receipt")
+        } catch (e: Exception) {
+            toast(e.message ?: "PDF failed", ToastMsg.Kind.Error)
+        }
+        busy = false
+    }
+
+    MmsDialog(title, onDismiss, compact = false) {
+        rows.forEach { (k, v) -> DetailRow(k, v, strong = k.equals("Amount", true)) }
+        Spacer(Modifier.height(6.dp))
+        if (!canWa) {
+            InfoBanner("No WhatsApp number on this family record — PDF and text share still work.", "warn")
+            Spacer(Modifier.height(6.dp))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MmsButton("PDF ${G.SHARE}", { makePdf() }, small = true, modifier = Modifier.weight(1f), enabled = !busy)
+            MmsButton("Share", { ShareUtil.shareText(ctx, messageText, "Share receipt") }, small = true, primary = false, modifier = Modifier.weight(1f))
+        }
+        if (canWa) {
+            MmsButton(
+                "Send via WhatsApp",
+                { ShareUtil.openWhatsApp(ctx, waPhone, messageText) },
+                small = true, primary = false, modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------- families
+
+@Composable
+fun FamiliesScreen(toast: (String, ToastMsg.Kind) -> Unit, initialSearch: String = "") {
     val repo = MmsApp.instance.repo
     val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
+    var search by remember { mutableStateOf(initialSearch) }
     var status by remember { mutableStateOf("All") }
     var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
+    var loading by remember { mutableStateOf(true) }
     var showForm by remember { mutableStateOf(false) }
     var editId by remember { mutableStateOf<Long?>(null) }
+    var detailId by remember { mutableStateOf<Long?>(null) }
+    var archiveId by remember { mutableStateOf<Long?>(null) }
+    var archiveReason by remember { mutableStateOf("") }
+    // form fields
     var houseName by remember { mutableStateOf("") }
     var houseNumber by remember { mutableStateOf("") }
     var ward by remember { mutableStateOf("") }
     var area by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
+    var altPhone by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
+    var pincode by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
+    var waPhone by remember { mutableStateOf("") }
+    var waOn by remember { mutableStateOf(true) }
+    var famStatus by remember { mutableStateOf("Active") }
     val c = C()
 
+    LaunchedEffect(initialSearch) { if (initialSearch.isNotBlank()) search = initialSearch }
     fun reload() = scope.launch {
-        rows = withContext(Dispatchers.IO) { repo.familiesList(search, status).rows }
+        loading = true
+        try {
+            rows = withContext(Dispatchers.IO) { repo.familiesList(search, status).rows }
+        } catch (e: Exception) {
+            toast(e.message ?: "Load failed", ToastMsg.Kind.Error)
+        }
+        loading = false
     }
     LaunchedEffect(search, status) { reload() }
 
-    ModuleScaffold(I18n.t("family_title"), I18n.t("family_subtitle"), listOf("All", "Active", "Inactive", "Archived"), status, { status = it }, search, { search = it }, onAdd = {
-        editId = null; houseName = ""; houseNumber = ""; ward = ""; area = ""; phone = ""; address = ""; showForm = true
-    }, addLabel = I18n.t("add_family")) {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(rows, key = { Format.long(it, "id") }) { row ->
-                MmsCard(onClick = {
-                    editId = Format.long(row, "id")
-                    houseName = Format.str(row, "house_name"); houseNumber = Format.str(row, "house_number")
-                    ward = Format.str(row, "ward"); area = Format.str(row, "area")
-                    phone = Format.str(row, "phone"); address = Format.str(row, "address")
-                    showForm = true
-                }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            CellText(Format.str(row, "house_name").ifBlank { "—" }, strong = true, sub = Format.str(row, "family_number"))
-                            androidx.compose.foundation.text.BasicText(
-                                listOf(Format.str(row, "ward"), Format.str(row, "area"), Format.str(row, "phone")).filter { it.isNotBlank() }.joinToString(" · "),
-                                style = MmsType.caption.copy(color = c.fnt)
+    fun openForm(row: Map<String, Any?>?) {
+        editId = row?.let { Format.long(it, "id") }
+        houseName = row?.let { Format.str(it, "house_name") } ?: ""
+        houseNumber = row?.let { Format.str(it, "house_number") } ?: ""
+        ward = row?.let { Format.str(it, "ward") } ?: ""
+        area = row?.let { Format.str(it, "area") } ?: ""
+        phone = row?.let { Format.str(it, "phone") } ?: ""
+        altPhone = row?.let { Format.str(it, "alternative_phone") } ?: ""
+        address = row?.let { Format.str(it, "address") } ?: ""
+        pincode = row?.let { Format.str(it, "pincode") } ?: ""
+        notes = row?.let { Format.str(it, "notes") } ?: ""
+        waPhone = row?.let { Format.str(it, "whatsapp_phone") } ?: ""
+        waOn = row?.let { Format.long(it, "whatsapp_enabled") != 0L } ?: true
+        famStatus = row?.let { Format.str(it, "status") }?.ifBlank { "Active" } ?: "Active"
+        showForm = true
+    }
+
+    ModuleScaffold(
+        I18n.t("family_title"), I18n.t("family_subtitle"),
+        listOf("All", "Active", "Inactive", "Archived"), status, { status = it },
+        search, { search = it }, loading = loading,
+        onAdd = { openForm(null) }, addLabel = I18n.t("add_family")
+    ) {
+        if (rows.isEmpty()) {
+            EmptyState(
+                I18n.t("common_no_data").ifBlank { "No records" },
+                I18n.t("family_empty_sub").ifBlank { "Add your first family to get started" },
+                I18n.t("add_family")
+            ) { openForm(null) }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(rows, key = { Format.long(it, "id") }) { row ->
+                    MmsCard(onClick = { detailId = Format.long(row, "id") }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TintTile(
+                                Format.str(row, "house_name").ifBlank { "F" }.take(1),
+                                Tints.of("em", c.isDark), 42.dp
                             )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                CellText(
+                                    Format.str(row, "house_name").ifBlank { "—" },
+                                    strong = true, sub = Format.str(row, "family_number")
+                                )
+                                androidx.compose.foundation.text.BasicText(
+                                    listOf(Format.str(row, "ward"), Format.str(row, "area"), Format.str(row, "phone")).filter { it.isNotBlank() }.joinToString(" · "),
+                                    style = MmsType.caption.copy(color = c.fnt)
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                StatusPill(Format.str(row, "status"), Format.str(row, "status"))
+                                Spacer(Modifier.height(4.dp))
+                                androidx.compose.foundation.text.BasicText(
+                                    "${Format.long(row, "member_count")} members",
+                                    style = MmsType.caption.copy(color = c.em, fontWeight = FontWeight.SemiBold)
+                                )
+                            }
                         }
-                        StatusPill(Format.str(row, "status"), Format.str(row, "status"))
-                        Spacer(Modifier.width(8.dp))
-                        androidx.compose.foundation.text.BasicText("${Format.long(row, "member_count")}", style = MmsType.body.copy(color = c.em, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold))
                     }
                 }
+                item { Spacer(Modifier.height(90.dp)) }
             }
-            item { Spacer(Modifier.height(80.dp)) }
         }
     }
-    if (showForm) {
-        MmsDialog(if (editId == null) I18n.t("add_family") else I18n.t("action_edit"), onDismiss = { showForm = false }, onConfirm = {
-            scope.launch {
-                try {
-                    val data = mapOf("houseName" to houseName, "houseNumber" to houseNumber, "ward" to ward, "area" to area, "phone" to phone, "address" to address, "status" to "Active")
-                    withContext(Dispatchers.IO) {
-                        if (editId == null) repo.familyCreate(data) else repo.familyUpdate(editId!!, data)
-                    }
-                    showForm = false; reload(); toast(I18n.t("action_save") + " ✓", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
+
+    // ---- detail
+    if (detailId != null) {
+        var detail by remember(detailId) { mutableStateOf<Map<String, Any?>>(emptyMap()) }
+        var detailLoading by remember(detailId) { mutableStateOf(true) }
+        LaunchedEffect(detailId) {
+            detailLoading = true
+            try {
+                detail = withContext(Dispatchers.IO) { repo.familyDetail(detailId!!) }
+            } catch (e: Exception) {
+                toast(e.message ?: "Load failed", ToastMsg.Kind.Error)
             }
-        }) {
+            detailLoading = false
+        }
+        val fam = (detail["family"] as? Map<String, Any?>) ?: emptyMap()
+        @Suppress("UNCHECKED_CAST")
+        val members = (detail["members"] as? List<Map<String, Any?>>) ?: emptyList()
+        val sub = (detail["subscription"] as? Map<String, Any?>) ?: emptyMap()
+        val ctx = LocalContext.current
+        MmsDialog(
+            Format.str(fam, "house_name").ifBlank { "Family" },
+            onDismiss = { detailId = null }
+        ) {
+            if (detailLoading) {
+                LoadingList(2)
+            } else {
+                DetailRow("Family No", Format.str(fam, "family_number"), mono = true)
+                DetailRow("House", "${Format.str(fam, "house_name")} ${Format.str(fam, "house_number")}".trim())
+                DetailRow("Ward / Area", "${Format.str(fam, "ward")} / ${Format.str(fam, "area")}")
+                DetailRow("Phone", ShareUtil.prettyPhone(Format.str(fam, "phone")))
+                DetailRow("WhatsApp", ShareUtil.prettyPhone(Format.str(fam, "whatsapp_phone").ifBlank { Format.str(fam, "phone") }))
+                DetailRow("Address", Format.str(fam, "address"))
+                DetailRow("Status", Format.str(fam, "status"), strong = true)
+                if (sub.isNotEmpty()) {
+                    SectionLabel("Subscription")
+                    DetailRow("Plan", Format.str(sub, "plan_name"))
+                    DetailRow(
+                        "Paid",
+                        "${Format.money(Format.num(sub, "amount_paid"))} / ${Format.money(Format.num(sub, "amount"))}"
+                    )
+                    DetailRow("Status", Format.str(sub, "status"), strong = true)
+                }
+                SectionLabel("Members (${members.size})")
+                if (members.isEmpty()) {
+                    androidx.compose.foundation.text.BasicText("No members yet", style = MmsType.caption.copy(color = c.fnt))
+                } else {
+                    members.forEach { m ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                CellText(Format.str(m, "name"), strong = true, sub = Format.str(m, "member_code"))
+                            }
+                            StatusPill(Format.str(m, "relationship").ifBlank { "Member" }, "default")
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MmsButton(I18n.t("action_edit"), { openForm(fam); detailId = null }, small = true, primary = false, modifier = Modifier.weight(1f))
+                    MmsButton("WhatsApp", {
+                        val p = Format.str(fam, "whatsapp_phone").ifBlank { Format.str(fam, "phone") }
+                        ShareUtil.openWhatsApp(ctx, p, "Assalamu Alaikum from ${I18n.t("app_name")}")
+                    }, small = true, primary = false, modifier = Modifier.weight(1f))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (Format.str(fam, "status") == "Archived") {
+                        MmsButton("Restore", {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { repo.familyRestore(detailId!!) }
+                                detailId = null; reload(); toast("Family restored", ToastMsg.Kind.Success)
+                            }
+                        }, small = true, modifier = Modifier.weight(1f))
+                    } else {
+                        MmsButton("Archive", {
+                            archiveId = detailId; archiveReason = ""
+                        }, small = true, danger = true, ghost = true, modifier = Modifier.weight(1f))
+                    }
+                    MmsButton("Call", {
+                        ShareUtil.dial(ctx, Format.str(fam, "phone"))
+                    }, small = true, primary = false, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+
+    // ---- archive confirm
+    if (archiveId != null) {
+        MmsDialog("Archive family", onDismiss = { archiveId = null }, confirmLabel = "Archive", danger = true, compact = true,
+            onConfirm = {
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { repo.familyArchive(archiveId!!, archiveReason.ifBlank { "Archived" }) }
+                        archiveId = null; detailId = null; reload(); toast("Family archived", ToastMsg.Kind.Success)
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                    }
+                }
+            }) {
+            androidx.compose.foundation.text.BasicText(
+                "Archived families are hidden from active lists but their history is preserved.",
+                style = MmsType.bodySm.copy(color = c.mut)
+            )
+            MmsInput(archiveReason, { archiveReason = it }, label = "Reason", placeholder = "Moved out / merged…")
+        }
+    }
+
+    // ---- form
+    if (showForm) {
+        MmsDialog(
+            if (editId == null) I18n.t("add_family") else I18n.t("action_edit"),
+            onDismiss = { showForm = false },
+            onConfirm = {
+                scope.launch {
+                    try {
+                        val data = mapOf(
+                            "houseName" to houseName, "houseNumber" to houseNumber, "ward" to ward,
+                            "area" to area, "phone" to phone, "altPhone" to altPhone, "address" to address,
+                            "pincode" to pincode, "notes" to notes, "status" to famStatus,
+                            "whatsappPhone" to waPhone, "whatsappEnabled" to if (waOn) 1 else 0
+                        )
+                        withContext(Dispatchers.IO) {
+                            if (editId == null) repo.familyCreate(data) else repo.familyUpdate(editId!!, data)
+                        }
+                        showForm = false; reload(); toast(I18n.t("action_save") + " ✓", ToastMsg.Kind.Success)
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                    }
+                }
+            },
+            confirmEnabled = houseName.isNotBlank()
+        ) {
             MmsInput(houseName, { houseName = it }, label = I18n.t("family_house_name"))
-            MmsInput(houseNumber, { houseNumber = it }, label = I18n.t("family_house_number"))
-            MmsInput(ward, { ward = it }, label = I18n.t("family_ward"))
-            MmsInput(area, { area = it }, label = I18n.t("family_area"))
-            MmsInput(phone, { phone = it }, label = I18n.t("family_phone"))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsInput(houseNumber, { houseNumber = it }, label = I18n.t("family_house_number"), modifier = Modifier.weight(1f))
+                MmsInput(pincode, { pincode = it }, label = "Pincode", modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsInput(ward, { ward = it }, label = I18n.t("family_ward"), modifier = Modifier.weight(1f))
+                MmsInput(area, { area = it }, label = I18n.t("family_area"), modifier = Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsInput(phone, { phone = it }, label = I18n.t("family_phone"), modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
+                MmsInput(altPhone, { altPhone = it }, label = "Alt phone", modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
+            }
+            MmsInput(waPhone, { waPhone = it }, label = "WhatsApp number", placeholder = "Same as phone if blank", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.foundation.text.BasicText("WhatsApp enabled", style = MmsType.bodySm.copy(color = c.tx), modifier = Modifier.weight(1f))
+                FilterChip("On", waOn, { waOn = true })
+                Spacer(Modifier.width(6.dp))
+                FilterChip("Off", !waOn, { waOn = false })
+            }
             MmsInput(address, { address = it }, label = I18n.t("family_address"), singleLine = false)
+            MmsInput(notes, { notes = it }, label = "Notes", singleLine = false)
+            if (editId != null) {
+                MmsSelect(famStatus, listOf("Active", "Inactive", "Archived"), { famStatus = it }, label = "Status")
+            }
         }
     }
 }
 
+// ---------------------------------------------------------------- members
+
 @Composable
-fun MembersScreen(toast: (String, ToastMsg.Kind) -> Unit) {
+fun MembersScreen(toast: (String, ToastMsg.Kind) -> Unit, initialSearch: String = "") {
     val repo = MmsApp.instance.repo
     val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
+    var search by remember { mutableStateOf(initialSearch) }
     var status by remember { mutableStateOf("All") }
     var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
+    var loading by remember { mutableStateOf(true) }
     var families by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
     var showForm by remember { mutableStateOf(false) }
     var editId by remember { mutableStateOf<Long?>(null) }
+    var detailId by remember { mutableStateOf<Long?>(null) }
+    var archiveId by remember { mutableStateOf<Long?>(null) }
+    var archiveReason by remember { mutableStateOf("") }
+    // form
     var name by remember { mutableStateOf("") }
     var gender by remember { mutableStateOf("Male") }
     var mobile by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
     var relationship by remember { mutableStateOf("Other") }
+    var dob by remember { mutableStateOf("") }
+    var blood by remember { mutableStateOf("") }
+    var occupation by remember { mutableStateOf("") }
+    var marital by remember { mutableStateOf("Single") }
+    var fatherName by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf("") }
+    var emergency by remember { mutableStateOf("") }
+    var memStatus by remember { mutableStateOf("Active") }
     var familyId by remember { mutableStateOf(0L) }
     var familyLabel by remember { mutableStateOf("") }
     val c = C()
-    fun reload() = scope.launch { rows = withContext(Dispatchers.IO) { repo.membersList(search, status = status).rows } }
-    LaunchedEffect(search, status) { reload() }
-    LaunchedEffect(Unit) { families = withContext(Dispatchers.IO) { repo.familiesList(status = "Active").rows } }
 
-    ModuleScaffold(I18n.t("member_title"), I18n.t("member_subtitle"), listOf("All", "Active", "Inactive", "Deceased"), status, { status = it }, search, { search = it },
-        onAdd = { editId = null; name = ""; gender = "Male"; mobile = ""; relationship = "Other"; familyId = 0; familyLabel = ""; showForm = true },
-        addLabel = I18n.t("add_member")) {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(rows, key = { Format.long(it, "id") }) { row ->
-                MmsCard(onClick = {
-                    editId = Format.long(row, "id"); name = Format.str(row, "name"); gender = Format.str(row, "gender")
-                    mobile = Format.str(row, "mobile"); relationship = Format.str(row, "relationship")
-                    familyId = Format.long(row, "family_id"); familyLabel = Format.str(row, "family_number"); showForm = true
-                }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            CellText(Format.str(row, "name"), strong = true, sub = Format.str(row, "member_code"))
-                            androidx.compose.foundation.text.BasicText(
-                                listOf(Format.str(row, "family_number"), Format.str(row, "relationship"), Format.str(row, "mobile")).filter { it.isNotBlank() }.joinToString(" · "),
-                                style = MmsType.caption.copy(color = c.fnt)
-                            )
+    LaunchedEffect(initialSearch) { if (initialSearch.isNotBlank()) search = initialSearch }
+    fun reload() = scope.launch {
+        loading = true
+        try {
+            rows = withContext(Dispatchers.IO) { repo.membersList(search, status = status).rows }
+        } catch (e: Exception) {
+            toast(e.message ?: "Load failed", ToastMsg.Kind.Error)
+        }
+        loading = false
+    }
+    LaunchedEffect(search, status) { reload() }
+    LaunchedEffect(Unit) {
+        families = withContext(Dispatchers.IO) { repo.familiesList(status = "Active").rows }
+    }
+
+    fun openForm(row: Map<String, Any?>?) {
+        editId = row?.let { Format.long(it, "id") }
+        name = row?.let { Format.str(it, "name") } ?: ""
+        gender = row?.let { Format.str(it, "gender") }?.ifBlank { "Male" } ?: "Male"
+        mobile = row?.let { Format.str(it, "mobile") } ?: ""
+        email = row?.let { Format.str(it, "email") } ?: ""
+        relationship = row?.let { Format.str(it, "relationship") }?.ifBlank { "Other" } ?: "Other"
+        dob = row?.let { Format.str(it, "date_of_birth") } ?: ""
+        blood = row?.let { Format.str(it, "blood_group") } ?: ""
+        occupation = row?.let { Format.str(it, "occupation") } ?: ""
+        marital = row?.let { Format.str(it, "marital_status") }?.ifBlank { "Single" } ?: "Single"
+        fatherName = row?.let { Format.str(it, "father_name") } ?: ""
+        address = row?.let { Format.str(it, "address") } ?: ""
+        emergency = row?.let { Format.str(it, "emergency_contact") } ?: ""
+        memStatus = row?.let { Format.str(it, "status") }?.ifBlank { "Active" } ?: "Active"
+        familyId = row?.let { Format.long(it, "family_id") } ?: 0L
+        familyLabel = if (row == null) "" else "${Format.str(row, "family_number")} — ${Format.str(row, "family_house_name").ifBlank { Format.str(row, "house_name") }}"
+        showForm = true
+    }
+
+    ModuleScaffold(
+        I18n.t("member_title"), I18n.t("member_subtitle"),
+        listOf("All", "Active", "Inactive", "Deceased"), status, { status = it },
+        search, { search = it }, loading = loading,
+        onAdd = { openForm(null) }, addLabel = I18n.t("add_member")
+    ) {
+        if (rows.isEmpty()) {
+            EmptyState(I18n.t("common_no_data").ifBlank { "No records" }, "", I18n.t("add_member")) { openForm(null) }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(rows, key = { Format.long(it, "id") }) { row ->
+                    MmsCard(onClick = { detailId = Format.long(row, "id") }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TintTile(Format.str(row, "name").ifBlank { "M" }.take(1), Tints.of("teal", c.isDark), 42.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                CellText(Format.str(row, "name"), strong = true, sub = Format.str(row, "member_code"))
+                                androidx.compose.foundation.text.BasicText(
+                                    listOf(Format.str(row, "family_number"), Format.str(row, "relationship"), Format.str(row, "mobile")).filter { it.isNotBlank() }.joinToString(" · "),
+                                    style = MmsType.caption.copy(color = c.fnt)
+                                )
+                            }
+                            StatusPill(Format.str(row, "status"), Format.str(row, "status"))
                         }
-                        StatusPill(Format.str(row, "status"), Format.str(row, "status"))
                     }
                 }
+                item { Spacer(Modifier.height(90.dp)) }
             }
-            item { Spacer(Modifier.height(80.dp)) }
         }
     }
-    if (showForm) {
-        MmsDialog(if (editId == null) I18n.t("add_member") else I18n.t("action_edit"), onDismiss = { showForm = false }, onConfirm = {
-            scope.launch {
-                try {
-                    val data = mapOf("name" to name, "gender" to gender, "mobile" to mobile, "relationship" to relationship, "familyId" to familyId, "status" to "Active")
-                    withContext(Dispatchers.IO) { if (editId == null) repo.memberCreate(data) else repo.memberUpdate(editId!!, data) }
-                    showForm = false; reload(); toast("Saved", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
+
+    // ---- detail with relations
+    if (detailId != null) {
+        var full by remember(detailId) { mutableStateOf<Map<String, Any?>>(emptyMap()) }
+        var relations by remember(detailId) { mutableStateOf<Map<String, Any?>>(emptyMap()) }
+        var dl by remember(detailId) { mutableStateOf(true) }
+        LaunchedEffect(detailId) {
+            dl = true
+            try {
+                withContext(Dispatchers.IO) {
+                    full = repo.memberFull(detailId!!) ?: emptyMap()
+                    relations = repo.memberRelations(detailId!!) ?: emptyMap()
+                }
+            } catch (e: Exception) {
+                toast(e.message ?: "Load failed", ToastMsg.Kind.Error)
             }
-        }, confirmEnabled = name.isNotBlank() && familyId > 0) {
+            dl = false
+        }
+        val ctx = LocalContext.current
+        MmsDialog(Format.str(full, "name").ifBlank { "Member" }, onDismiss = { detailId = null }) {
+            if (dl) {
+                LoadingList(2)
+            } else {
+                DetailRow("Code", Format.str(full, "member_code"), mono = true)
+                DetailRow("Family", "${Format.str(full, "house_name")} (${Format.str(full, "family_number")})")
+                DetailRow("Gender", Format.str(full, "gender"))
+                DetailRow("DOB", Format.str(full, "date_of_birth"))
+                DetailRow("Mobile", ShareUtil.prettyPhone(Format.str(full, "mobile")))
+                DetailRow("Relationship", Format.str(full, "relationship"))
+                DetailRow("Father", Format.str(full, "father_name"))
+                DetailRow("Occupation", Format.str(full, "occupation"))
+                DetailRow("Blood", Format.str(full, "blood_group"))
+                DetailRow("Marital", Format.str(full, "marital_status"))
+                DetailRow("Status", Format.str(full, "status"), strong = true)
+                SectionLabel("Family links")
+                RelationRow("Father", relations["father"] as? Map<String, Any?>) { detailId = it }
+                RelationRow("Mother", relations["mother"] as? Map<String, Any?>) { detailId = it }
+                RelationRow("Spouse", relations["spouse"] as? Map<String, Any?>) { detailId = it }
+                @Suppress("UNCHECKED_CAST")
+                val children = (relations["children"] as? List<Map<String, Any?>>) ?: emptyList()
+                if (children.isNotEmpty()) {
+                    androidx.compose.foundation.text.BasicText(
+                        "Children (${children.size})",
+                        style = MmsType.caption.copy(color = c.fnt),
+                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+                    )
+                    children.forEach { ch ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+                                .mmsClickable { detailId = Format.long(ch, "id") }
+                                .padding(vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CellText(Format.str(ch, "name"), strong = true, sub = Format.str(ch, "member_code"))
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MmsButton(I18n.t("action_edit"), {
+                        val id = detailId
+                        detailId = null
+                        val row = rows.firstOrNull { Format.long(it, "id") == id }
+                        openForm(row)
+                    }, small = true, primary = false, modifier = Modifier.weight(1f))
+                    MmsButton("Call", { ShareUtil.dial(ctx, Format.str(full, "mobile")) }, small = true, primary = false, modifier = Modifier.weight(1f))
+                    MmsButton("Archive", { archiveId = detailId; archiveReason = "" }, small = true, danger = true, ghost = true, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+
+    if (archiveId != null) {
+        MmsDialog("Archive member", onDismiss = { archiveId = null }, confirmLabel = "Archive", danger = true, compact = true,
+            onConfirm = {
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { repo.memberArchive(archiveId!!, archiveReason.ifBlank { "Archived" }) }
+                        archiveId = null; detailId = null; reload(); toast("Member archived", ToastMsg.Kind.Success)
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                    }
+                }
+            }) {
+            androidx.compose.foundation.text.BasicText("The member record is preserved for history.", style = MmsType.bodySm.copy(color = c.mut))
+            MmsInput(archiveReason, { archiveReason = it }, label = "Reason")
+        }
+    }
+
+    // ---- form
+    if (showForm) {
+        val famOptions = families.map { "${Format.str(it, "family_number")} — ${Format.str(it, "house_name")}" }
+        MmsDialog(
+            if (editId == null) I18n.t("add_member") else I18n.t("action_edit"),
+            onDismiss = { showForm = false },
+            onConfirm = {
+                scope.launch {
+                    try {
+                        val data = mapOf(
+                            "name" to name, "gender" to gender, "mobile" to mobile, "email" to email,
+                            "relationship" to relationship, "familyId" to familyId, "status" to memStatus,
+                            "dateOfBirth" to dob, "bloodGroup" to blood, "occupation" to occupation,
+                            "maritalStatus" to marital, "fatherName" to fatherName, "address" to address,
+                            "emergencyContact" to emergency
+                        )
+                        withContext(Dispatchers.IO) {
+                            if (editId == null) repo.memberCreate(data) else repo.memberUpdate(editId!!, data)
+                        }
+                        showForm = false; reload(); toast("Saved ✓", ToastMsg.Kind.Success)
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                    }
+                }
+            },
+            confirmEnabled = name.isNotBlank() && familyId > 0
+        ) {
             MmsInput(name, { name = it }, label = I18n.t("member_name"))
-            MmsSelect(gender, listOf("Male", "Female", "Other"), { gender = it }, label = I18n.t("member_gender"))
-            MmsSelect(relationship, repo.memberRelationships(), { relationship = it }, label = I18n.t("member_relationship"))
-            MmsInput(mobile, { mobile = it }, label = I18n.t("member_mobile"))
             MmsSelect(
                 familyLabel.ifBlank { "Select family" },
-                families.map { "${Format.str(it, "family_number")} — ${Format.str(it, "house_name")}" },
+                famOptions,
                 { label ->
                     familyLabel = label
                     val code = label.substringBefore(" —")
@@ -199,148 +618,507 @@ fun MembersScreen(toast: (String, ToastMsg.Kind) -> Unit) {
                 },
                 label = I18n.t("member_family")
             )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsSelect(gender, listOf("Male", "Female", "Other"), { gender = it }, label = I18n.t("member_gender"), modifier = Modifier.weight(1f))
+                MmsSelect(relationship, repo.memberRelationships(), { relationship = it }, label = I18n.t("member_relationship"), modifier = Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsInput(mobile, { mobile = it }, label = I18n.t("member_mobile"), modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
+                MmsDateField(dob, { dob = it }, label = "Date of birth", modifier = Modifier.weight(1f))
+            }
+            MmsInput(fatherName, { fatherName = it }, label = "Father's name")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsSelect(blood, listOf("", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"), { blood = it }, label = "Blood group", modifier = Modifier.weight(1f))
+                MmsSelect(marital, listOf("Single", "Married", "Divorced", "Widowed"), { marital = it }, label = "Marital status", modifier = Modifier.weight(1f))
+            }
+            MmsInput(occupation, { occupation = it }, label = "Occupation")
+            MmsInput(email, { email = it }, label = "Email", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
+            MmsInput(emergency, { emergency = it }, label = "Emergency contact", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
+            MmsInput(address, { address = it }, label = "Address", singleLine = false)
+            if (editId != null) {
+                MmsSelect(memStatus, listOf("Active", "Inactive", "Deceased"), { memStatus = it }, label = "Status")
+            }
         }
     }
 }
 
 @Composable
-fun SubscriptionsScreen(toast: (String, ToastMsg.Kind) -> Unit) {
+private fun RelationRow(label: String, person: Map<String, Any?>?, onOpen: (Long) -> Unit) {
+    val c = C()
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        androidx.compose.foundation.text.BasicText(label, style = MmsType.caption.copy(color = c.fnt), modifier = Modifier.width(64.dp))
+        if (person == null) {
+            androidx.compose.foundation.text.BasicText("—", style = MmsType.bodySm.copy(color = c.fnt))
+        } else {
+            Box(
+                Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                    .mmsClickable { onOpen(Format.long(person, "id")) }
+            ) {
+                androidx.compose.foundation.text.BasicText(
+                    "${Format.str(person, "name")} · ${Format.str(person, "member_code")} ${G.RIGHT}",
+                    style = MmsType.bodySm.copy(color = c.emd, fontWeight = FontWeight.SemiBold)
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- subscriptions
+
+@Composable
+fun SubscriptionsScreen(toast: (String, ToastMsg.Kind) -> Unit, initialSearch: String = "") {
     val repo = MmsApp.instance.repo
     val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
+    var search by remember { mutableStateOf(initialSearch) }
     var status by remember { mutableStateOf("All") }
     var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    var payId by remember { mutableStateOf<Long?>(null) }
-    var amount by remember { mutableStateOf("") }
-    var method by remember { mutableStateOf("Cash") }
+    var loading by remember { mutableStateOf(true) }
+    var payRow by remember { mutableStateOf<Map<String, Any?>?>(null) }
+    var receiptRow by remember { mutableStateOf<Map<String, Any?>?>(null) }
+    var historyId by remember { mutableStateOf<Long?>(null) }
+    var payAmount by remember { mutableStateOf("") }
+    var payMethod by remember { mutableStateOf("Cash") }
+    var payDate by remember { mutableStateOf(Format.today()) }
+    var payRemarks by remember { mutableStateOf("") }
     var collected by remember { mutableStateOf(0.0) }
     var pending by remember { mutableStateOf(0.0) }
     val c = C()
+
+    LaunchedEffect(initialSearch) { if (initialSearch.isNotBlank()) search = initialSearch }
     fun reload() = scope.launch {
-        withContext(Dispatchers.IO) {
-            rows = repo.subscriptionsList(search, status).rows
-            collected = repo.subscriptionsTotalCollected()
-            pending = repo.subscriptionsTotalPending()
+        loading = true
+        try {
+            withContext(Dispatchers.IO) {
+                rows = repo.subscriptionsList(search, status).rows
+                collected = repo.subscriptionsTotalCollected()
+                pending = repo.subscriptionsTotalPending()
+            }
+        } catch (e: Exception) {
+            toast(e.message ?: "Load failed", ToastMsg.Kind.Error)
         }
+        loading = false
     }
     LaunchedEffect(search, status) { reload() }
-    ModuleScaffold(I18n.t("sub_title"), "Household subscription accounts", listOf("All", "Paid", "Pending", "Overdue", "Partial"), status, { status = it }, search, { search = it },
+
+    ModuleScaffold(
+        I18n.t("sub_title"), "Household subscription accounts",
+        listOf("All", "Paid", "Pending", "Overdue", "Partial"), status, { status = it },
+        search, { search = it }, loading = loading,
         extraActions = {
             MmsButton(I18n.t("sub_mark_overdue"), {
-                scope.launch { withContext(Dispatchers.IO) { repo.markOverdue() }; reload(); toast("Marked overdue", ToastMsg.Kind.Info) }
+                scope.launch {
+                    withContext(Dispatchers.IO) { repo.markOverdue() }
+                    reload(); toast("Marked overdue", ToastMsg.Kind.Info)
+                }
             }, small = true, primary = false)
-        }) {
+        }
+    ) {
         Column {
             Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatTile("Collected", Format.moneyShort(collected), Tints.of("em", c.isDark), modifier = Modifier.weight(1f))
                 StatTile("Pending", Format.moneyShort(pending), Tints.of("gold", c.isDark), modifier = Modifier.weight(1f))
             }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(rows, key = { Format.long(it, "id") }) { row ->
-                    MmsCard(onClick = {
-                        payId = Format.long(row, "id")
-                        amount = Format.num(row, "amount").toString()
-                        method = "Cash"
-                    }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                CellText(Format.str(row, "house_name").ifBlank { Format.str(row, "family_number") }, strong = true, sub = Format.str(row, "family_number"))
-                                androidx.compose.foundation.text.BasicText(
-                                    "${Format.money(Format.num(row, "amount_paid"))} / ${Format.money(Format.num(row, "amount"))}",
-                                    style = MmsType.caption.copy(color = c.mut)
-                                )
+            if (rows.isEmpty()) {
+                EmptyState(I18n.t("common_no_data").ifBlank { "No records" }, "Subscriptions are auto-created for active families")
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(rows, key = { Format.long(it, "id") }) { row ->
+                        val st = Format.str(row, "status")
+                        MmsCard(onClick = {
+                            if (st == "Paid" && Format.str(row, "receipt_number").isNotBlank()) receiptRow = row
+                            else {
+                                payRow = row
+                                val due = Format.num(row, "amount") + Format.num(row, "arrears") - Format.num(row, "advance") - Format.num(row, "amount_paid")
+                                payAmount = "%.2f".format(due.coerceAtLeast(0.0))
+                                payMethod = "Cash"; payDate = Format.today(); payRemarks = ""
                             }
-                            StatusPill(Format.str(row, "status"), Format.str(row, "status"))
+                        }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    CellText(
+                                        Format.str(row, "house_name").ifBlank { Format.str(row, "family_number") },
+                                        strong = true, sub = Format.str(row, "family_number")
+                                    )
+                                    androidx.compose.foundation.text.BasicText(
+                                        "${Format.money(Format.num(row, "amount_paid"))} / ${Format.money(Format.num(row, "amount"))}" +
+                                            (if (Format.num(row, "arrears") > 0) "  ·  Arrears ${Format.money(Format.num(row, "arrears"))}" else ""),
+                                        style = MmsType.caption.copy(color = c.mut)
+                                    )
+                                    if (Format.str(row, "receipt_number").isNotBlank()) {
+                                        androidx.compose.foundation.text.BasicText(
+                                            "Receipt ${Format.str(row, "receipt_number")} — tap to view",
+                                            style = MmsType.caption.copy(color = c.em)
+                                        )
+                                    }
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    StatusPill(st, st)
+                                    Spacer(Modifier.height(6.dp))
+                                    MmsButton("History", { historyId = Format.long(row, "id") }, small = true, primary = false)
+                                }
+                            }
                         }
                     }
+                    item { Spacer(Modifier.height(90.dp)) }
                 }
-                item { Spacer(Modifier.height(80.dp)) }
             }
         }
     }
-    if (payId != null) {
-        MmsDialog("Record Payment", onDismiss = { payId = null }, confirmLabel = "Collect", onConfirm = {
+
+    // ---- pay
+    if (payRow != null) {
+        val row = payRow!!
+        val due = Format.num(row, "amount") + Format.num(row, "arrears") - Format.num(row, "advance") - Format.num(row, "amount_paid")
+        MmsDialog("Record Payment", onDismiss = { payRow = null }, confirmLabel = "Collect", onConfirm = {
             scope.launch {
                 try {
-                    withContext(Dispatchers.IO) {
-                        repo.subscriptionPay(payId!!, amount.toDoubleOrNull() ?: 0.0, method, Format.today())
+                    val now = payAmount.toDoubleOrNull() ?: 0.0
+                    require(now > 0) { "Enter an amount greater than zero" }
+                    val res = withContext(Dispatchers.IO) {
+                        repo.subscriptionPay(Format.long(row, "id"), Format.num(row, "amount_paid") + now, payMethod, payDate, payRemarks)
                     }
-                    payId = null; reload(); toast("Payment recorded", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
+                    payRow = null; reload()
+                    toast("Receipt ${res["receiptNumber"]}", ToastMsg.Kind.Success)
+                } catch (e: Exception) {
+                    toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                }
             }
         }) {
-            MmsInput(amount, { amount = it }, label = I18n.t("sub_amount"))
-            MmsSelect(method, listOf("Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"), { method = it }, label = I18n.t("sub_method"))
+            DetailRow("Family", "${Format.str(row, "house_name")} (${Format.str(row, "family_number")})")
+            DetailRow("Total due", Format.money(due.coerceAtLeast(0.0)), strong = true)
+            DetailRow("Already paid", Format.money(Format.num(row, "amount_paid")))
+            MmsInput(payAmount, { payAmount = it }, label = I18n.t("sub_amount"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            MmsSelect(payMethod, listOf("Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"), { payMethod = it }, label = I18n.t("sub_method"))
+            MmsDateField(payDate, { payDate = it }, label = "Payment date")
+            MmsInput(payRemarks, { payRemarks = it }, label = "Remarks", singleLine = false)
+        }
+    }
+
+    // ---- receipt
+    if (receiptRow != null) {
+        val row = receiptRow!!
+        val id = Format.long(row, "id")
+        var msg by remember(id) { mutableStateOf("") }
+        LaunchedEffect(id) { msg = withContext(Dispatchers.IO) { repo.receiptText("subscription", id) } }
+        ReceiptDialog(
+            "Subscription Receipt",
+            Format.str(row, "receipt_number"),
+            listOf(
+                "Receipt" to Format.str(row, "receipt_number"),
+                "Date" to Format.str(row, "payment_date"),
+                "Family" to "${Format.str(row, "house_name")} (${Format.str(row, "family_number")})",
+                "Amount" to Format.money(Format.num(row, "amount_paid")),
+                "Method" to Format.str(row, "payment_method"),
+                "Status" to Format.str(row, "status")
+            ),
+            msg,
+            Format.str(row, "family_phone"),
+            onDismiss = { receiptRow = null },
+            toast = toast
+        )
+    }
+
+    // ---- history
+    if (historyId != null) {
+        var pays by remember(historyId) { mutableStateOf(listOf<Map<String, Any?>>()) }
+        LaunchedEffect(historyId) {
+            pays = withContext(Dispatchers.IO) { repo.subscriptionPayments(historyId!!) }
+        }
+        MmsDialog("Payment history", onDismiss = { historyId = null }, compact = true) {
+            if (pays.isEmpty()) {
+                androidx.compose.foundation.text.BasicText("No recorded payments yet", style = MmsType.bodySm.copy(color = c.mut))
+            } else {
+                pays.forEach { p ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            CellText(Format.money(Format.num(p, "amount")), strong = true, sub = Format.str(p, "receipt_number"))
+                        }
+                        androidx.compose.foundation.text.BasicText(
+                            Format.str(p, "payment_date"),
+                            style = MmsType.caption.copy(color = c.fnt)
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
+// ---------------------------------------------------------------- donations
+
 @Composable
-fun DonationsScreen(toast: (String, ToastMsg.Kind) -> Unit) {
+fun DonationsScreen(toast: (String, ToastMsg.Kind) -> Unit, initialSearch: String = "") {
     val repo = MmsApp.instance.repo
     val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
+    val ctx = LocalContext.current
+    var search by remember { mutableStateOf(initialSearch) }
     var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
+    var loading by remember { mutableStateOf(true) }
     var cats by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
+    var families by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
     var show by remember { mutableStateOf(false) }
+    var receiptRow by remember { mutableStateOf<Map<String, Any?>>(null) }
+    var editRow by remember { mutableStateOf<Map<String, Any?>?>(null) }
+    var manageCats by remember { mutableStateOf(false) }
+    var newCat by remember { mutableStateOf("") }
+    // form
     var donor by remember { mutableStateOf("") }
+    var donorPhone by remember { mutableStateOf("") }
+    var donorAddr by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
     var catId by remember { mutableStateOf(0L) }
     var catLabel by remember { mutableStateOf("") }
     var method by remember { mutableStateOf("Cash") }
+    var date by remember { mutableStateOf(Format.today()) }
+    var purpose by remember { mutableStateOf("") }
+    var remarks by remember { mutableStateOf("") }
+    var txnRef by remember { mutableStateOf("") }
+    var linkFamId by remember { mutableStateOf(0L) }
+    var linkFamLabel by remember { mutableStateOf("") }
+    // edit-auth
+    var adminPwd by remember { mutableStateOf("") }
+    var editReason by remember { mutableStateOf("") }
     var total by remember { mutableStateOf(0.0) }
     val c = C()
+
+    LaunchedEffect(initialSearch) { if (initialSearch.isNotBlank()) search = initialSearch }
     fun reload() = scope.launch {
-        withContext(Dispatchers.IO) {
-            rows = repo.donationsList(search).rows
-            cats = repo.donationCategories()
-            total = repo.donationsTotalThisMonth()
-            if (catId == 0L && cats.isNotEmpty()) {
-                catId = Format.long(cats.first(), "id"); catLabel = Format.str(cats.first(), "name")
+        loading = true
+        try {
+            withContext(Dispatchers.IO) {
+                rows = repo.donationsList(search).rows
+                cats = repo.donationCategories()
+                total = repo.donationsTotalThisMonth()
+                if (families.isEmpty()) families = repo.familiesList(status = "Active").rows
+                if (catId == 0L && cats.isNotEmpty()) {
+                    catId = Format.long(cats.first(), "id"); catLabel = Format.str(cats.first(), "name")
+                }
             }
+        } catch (e: Exception) {
+            toast(e.message ?: "Load failed", ToastMsg.Kind.Error)
         }
+        loading = false
     }
     LaunchedEffect(search) { reload() }
-    ModuleScaffold(I18n.t("don_title"), I18n.t("don_subtitle"), listOf("All"), "All", {}, search, { search = it },
-        onAdd = { donor = ""; amount = ""; method = "Cash"; show = true }, addLabel = I18n.t("dash_qa_add_donation")) {
+
+    fun openForm() {
+        donor = ""; donorPhone = ""; donorAddr = ""; amount = ""; method = "Cash"
+        date = Format.today(); purpose = ""; remarks = ""; txnRef = ""
+        linkFamId = 0; linkFamLabel = ""
+        show = true
+    }
+
+    ModuleScaffold(
+        I18n.t("don_title"), I18n.t("don_subtitle"),
+        search = search, onSearch = { search = it }, loading = loading,
+        onAdd = { openForm() }, addLabel = I18n.t("dash_qa_add_donation"),
+        extraActions = {
+            MmsButton("Categories", { manageCats = true; newCat = "" }, small = true, primary = false)
+        }
+    ) {
         Column {
-            StatTile(I18n.t("dash_donations_month"), Format.money(total), Tints.of("pink", c.isDark), I18n.t("dash_this_month"), Modifier.fillMaxWidth().padding(bottom = 10.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(rows, key = { Format.long(it, "id") }) { row ->
-                    MmsCard {
-                        Row {
-                            Column(Modifier.weight(1f)) {
-                                CellText(Format.str(row, "donor_name"), strong = true, sub = Format.str(row, "receipt_number"))
-                                androidx.compose.foundation.text.BasicText(Format.str(row, "category_name") + " · " + Format.str(row, "donation_date"), style = MmsType.caption.copy(color = c.fnt))
+            StatTile(
+                I18n.t("dash_donations_month"), Format.money(total),
+                Tints.of("pink", c.isDark), I18n.t("dash_this_month"),
+                Modifier.fillMaxWidth().padding(bottom = 10.dp)
+            )
+            if (rows.isEmpty()) {
+                EmptyState(I18n.t("common_no_data").ifBlank { "No records" }, "", I18n.t("dash_qa_add_donation")) { openForm() }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(rows, key = { Format.long(it, "id") }) { row ->
+                        MmsCard(onClick = { receiptRow = row }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    CellText(Format.str(row, "donor_name"), strong = true, sub = Format.str(row, "receipt_number"))
+                                    androidx.compose.foundation.text.BasicText(
+                                        Format.str(row, "category_name") + " · " + Format.str(row, "donation_date"),
+                                        style = MmsType.caption.copy(color = c.fnt)
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    androidx.compose.foundation.text.BasicText(
+                                        Format.money(Format.num(row, "amount")),
+                                        style = MmsType.body.copy(color = c.em, fontWeight = FontWeight.Bold)
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    MmsButton("Edit", { editRow = row }, small = true, primary = false)
+                                }
                             }
-                            androidx.compose.foundation.text.BasicText(Format.money(Format.num(row, "amount")), style = MmsType.body.copy(color = c.em, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold))
                         }
                     }
+                    item { Spacer(Modifier.height(90.dp)) }
                 }
-                item { Spacer(Modifier.height(80.dp)) }
             }
         }
     }
+
+    // ---- create
     if (show) {
         MmsDialog(I18n.t("dash_qa_add_donation"), onDismiss = { show = false }, onConfirm = {
             scope.launch {
                 try {
-                    withContext(Dispatchers.IO) {
-                        repo.donationCreate(mapOf("donorName" to donor, "amount" to (amount.toDoubleOrNull() ?: 0.0), "categoryId" to catId, "paymentMethod" to method, "donationDate" to Format.today()))
+                    val res = withContext(Dispatchers.IO) {
+                        repo.donationCreate(
+                            mapOf(
+                                "donorName" to donor, "donorPhone" to donorPhone, "donorAddress" to donorAddr,
+                                "amount" to (amount.toDoubleOrNull() ?: 0.0), "categoryId" to catId,
+                                "paymentMethod" to method, "donationDate" to date, "purpose" to purpose,
+                                "remarks" to remarks, "transactionRef" to txnRef,
+                                "familyId" to if (linkFamId > 0) linkFamId else null
+                            )
+                        )
                     }
-                    show = false; reload(); toast("Donation saved", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
+                    show = false; reload(); toast("Receipt ${res["receiptNumber"]}", ToastMsg.Kind.Success)
+                } catch (e: Exception) {
+                    toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                }
             }
         }, confirmEnabled = donor.isNotBlank() && (amount.toDoubleOrNull() ?: 0.0) > 0 && catId > 0) {
             MmsInput(donor, { donor = it }, label = "Donor name")
-            MmsInput(amount, { amount = it }, label = I18n.t("sub_amount"))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsInput(donorPhone, { donorPhone = it }, label = "Donor phone", modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
+                MmsInput(amount, { amount = it }, label = I18n.t("sub_amount"), modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            }
             MmsSelect(catLabel.ifBlank { "Category" }, cats.map { Format.str(it, "name") }, {
-                catLabel = it; catId = cats.firstOrNull { c -> Format.str(c, "name") == it }?.let { Format.long(it, "id") } ?: 0
+                catLabel = it; catId = cats.firstOrNull { r -> Format.str(r, "name") == it }?.let { r -> Format.long(r, "id") } ?: 0
             }, label = "Category")
-            MmsSelect(method, listOf("Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"), { method = it }, label = I18n.t("sub_method"))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsSelect(method, listOf("Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"), { method = it }, label = I18n.t("sub_method"), modifier = Modifier.weight(1f))
+                MmsDateField(date, { date = it }, label = "Date", modifier = Modifier.weight(1f))
+            }
+            MmsSelect(
+                linkFamLabel.ifBlank { "No family link" },
+                listOf("No family link") + families.map { "${Format.str(it, "family_number")} — ${Format.str(it, "house_name")}" },
+                { label ->
+                    linkFamLabel = if (label == "No family link") "" else label
+                    linkFamId = if (label == "No family link") 0 else {
+                        val code = label.substringBefore(" —")
+                        families.firstOrNull { Format.str(it, "family_number") == code }?.let { Format.long(it, "id") } ?: 0
+                    }
+                },
+                label = "Link family (for WhatsApp receipt)"
+            )
+            MmsInput(purpose, { purpose = it }, label = "Purpose")
+            MmsInput(txnRef, { txnRef = it }, label = "Transaction ref (UPI / bank)")
+            MmsInput(donorAddr, { donorAddr = it }, label = "Donor address", singleLine = false)
+            MmsInput(remarks, { remarks = it }, label = "Remarks", singleLine = false)
+        }
+    }
+
+    // ---- receipt
+    if (receiptRow != null) {
+        val row = receiptRow!!
+        val id = Format.long(row, "id")
+        var msg by remember(id) { mutableStateOf("") }
+        var full by remember(id) { mutableStateOf<Map<String, Any?>>(row) }
+        LaunchedEffect(id) {
+            withContext(Dispatchers.IO) {
+                msg = repo.receiptText("donation", id)
+                full = repo.donationGet(id) ?: row
+            }
+        }
+        val linkedPhone = families.firstOrNull { Format.long(it, "id") == Format.long(full, "family_id") }?.let {
+            Format.str(it, "whatsapp_phone").ifBlank { Format.str(it, "phone") }
+        } ?: ""
+        ReceiptDialog(
+            "Donation Receipt",
+            Format.str(row, "receipt_number"),
+            listOf(
+                "Receipt" to Format.str(row, "receipt_number"),
+                "Date" to Format.str(row, "donation_date"),
+                "Donor" to Format.str(row, "donor_name"),
+                "Category" to Format.str(row, "category_name"),
+                "Amount" to Format.money(Format.num(row, "amount")),
+                "Method" to Format.str(row, "payment_method")
+            ),
+            msg,
+            linkedPhone.ifBlank { Format.str(full, "donor_phone") },
+            onDismiss = { receiptRow = null },
+            toast = toast
+        )
+    }
+
+    // ---- edit (admin protected)
+    if (editRow != null) {
+        val row = editRow!!
+        var eDonor by remember(row) { mutableStateOf(Format.str(row, "donor_name")) }
+        var eAmount by remember(row) { mutableStateOf(Format.num(row, "amount").toString()) }
+        var eMethod by remember(row) { mutableStateOf(Format.str(row, "payment_method").ifBlank { "Cash" }) }
+        var eDate by remember(row) { mutableStateOf(Format.str(row, "donation_date")) }
+        LaunchedEffect(row) { adminPwd = ""; editReason = "" }
+        MmsDialog("Edit donation", onDismiss = { editRow = null }, confirmLabel = "Save (admin)", onConfirm = {
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        repo.donationUpdate(
+                            Format.long(row, "id"),
+                            mapOf(
+                                "donorName" to eDonor, "donorPhone" to Format.str(row, "donor_phone"),
+                                "donorAddress" to Format.str(row, "donor_address"),
+                                "familyId" to Format.long(row, "family_id").let { if (it > 0) it else null },
+                                "memberId" to null, "categoryId" to Format.long(row, "category_id"),
+                                "amount" to (eAmount.toDoubleOrNull() ?: 0.0), "donationDate" to eDate,
+                                "purpose" to Format.str(row, "purpose"), "paymentMethod" to eMethod,
+                                "transactionRef" to Format.str(row, "transaction_ref"),
+                                "remarks" to Format.str(row, "remarks")
+                            ),
+                            adminPwd, editReason
+                        )
+                    }
+                    editRow = null; reload(); toast("Donation updated", ToastMsg.Kind.Success)
+                } catch (e: Exception) {
+                    toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                }
+            }
+        }, compact = true) {
+            InfoBanner("Financial records need an Administrator password plus a reason to edit.", "warn")
+            MmsInput(eDonor, { eDonor = it }, label = "Donor name")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsInput(eAmount, { eAmount = it }, label = "Amount", modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                MmsDateField(eDate, { eDate = it }, label = "Date", modifier = Modifier.weight(1f))
+            }
+            MmsSelect(eMethod, listOf("Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"), { eMethod = it }, label = "Method")
+            MmsInput(editReason, { editReason = it }, label = "Reason for edit")
+            MmsInput(adminPwd, { adminPwd = it }, label = "Administrator password", password = true)
+        }
+    }
+
+    // ---- categories
+    if (manageCats) {
+        MmsDialog("Donation categories", onDismiss = { manageCats = false }, compact = true) {
+            cats.forEach { cat ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.foundation.text.BasicText(
+                        Format.str(cat, "name"),
+                        style = MmsType.bodySm.copy(color = c.tx, fontWeight = FontWeight.Medium),
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatusPill(if (Format.long(cat, "is_active") == 1L) "Active" else "Inactive", if (Format.long(cat, "is_active") == 1L) "Active" else "Rejected")
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            MmsInput(newCat, { newCat = it }, label = "New category", placeholder = "e.g. Ramadan Fund")
+            MmsButton("Add category", {
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { repo.donationCreateCategory(newCat.trim()) }
+                        newCat = ""
+                        cats = withContext(Dispatchers.IO) { repo.donationCategories() }
+                        toast("Category added", ToastMsg.Kind.Success)
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                    }
+                }
+            }, small = true, modifier = Modifier.fillMaxWidth(), enabled = newCat.isNotBlank())
         }
     }
 }
+
+// ---------------------------------------------------------------- accounting
 
 @Composable
 fun AccountingScreen(toast: (String, ToastMsg.Kind) -> Unit) {
@@ -349,648 +1127,215 @@ fun AccountingScreen(toast: (String, ToastMsg.Kind) -> Unit) {
     var search by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("All") }
     var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
+    var loading by remember { mutableStateOf(true) }
+    var accounts by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
     var income by remember { mutableStateOf(0.0) }
     var expense by remember { mutableStateOf(0.0) }
     var balance by remember { mutableStateOf(0.0) }
     var show by remember { mutableStateOf(false) }
+    var detailRow by remember { mutableStateOf<Map<String, Any?>?>(null) }
+    var voidRow by remember { mutableStateOf<Map<String, Any?>?>(null) }
+    var voidReason by remember { mutableStateOf("") }
+    var adminPwd by remember { mutableStateOf("") }
+    // form
     var txnType by remember { mutableStateOf("Expense") }
     var amount by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
     var method by remember { mutableStateOf("Cash") }
+    var date by remember { mutableStateOf(Format.today()) }
+    var payee by remember { mutableStateOf("") }
+    var billNo by remember { mutableStateOf("") }
+    var txnRef by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("") }
+    var accountId by remember { mutableStateOf(0L) }
+    var accountLabel by remember { mutableStateOf("") }
     val c = C()
+
     fun reload() = scope.launch {
-        withContext(Dispatchers.IO) {
-            rows = repo.accountingList(search, type).rows
-            income = repo.accountingTotalIncome(); expense = repo.accountingTotalExpense(); balance = repo.accountingBalance()
+        loading = true
+        try {
+            withContext(Dispatchers.IO) {
+                rows = if (type == "Voided") repo.voidedTransactions()
+                else repo.accountingList(search, type).rows
+                income = repo.accountingTotalIncome()
+                expense = repo.accountingTotalExpense()
+                balance = repo.accountingBalance()
+                if (accounts.isEmpty()) accounts = repo.ledgerAccounts()
+            }
+        } catch (e: Exception) {
+            toast(e.message ?: "Load failed", ToastMsg.Kind.Error)
         }
+        loading = false
     }
     LaunchedEffect(search, type) { reload() }
-    ModuleScaffold("Accounting", "Income, expenses & ledger", listOf("All", "Income", "Expense"), type, { type = it }, search, { search = it },
-        onAdd = { amount = ""; desc = ""; txnType = if (type == "Income") "Income" else "Expense"; show = true }, addLabel = "Add entry") {
+
+    val typeAccounts = accounts.filter { Format.str(it, "type") == txnType }
+    fun openForm() {
+        amount = ""; desc = ""; payee = ""; billNo = ""; txnRef = ""; category = ""
+        txnType = if (type == "Income") "Income" else "Expense"
+        method = "Cash"; date = Format.today()
+        accountId = 0; accountLabel = ""
+        show = true
+    }
+
+    ModuleScaffold(
+        "Accounting", "Income, expenses & ledger",
+        listOf("All", "Income", "Expense", "Voided"), type, { type = it },
+        search, { search = it }, loading = loading,
+        onAdd = { openForm() }, addLabel = "Add entry"
+    ) {
         Column {
             Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatTile("Income", Format.moneyShort(income), Tints.of("em", c.isDark), modifier = Modifier.weight(1f))
                 StatTile("Expense", Format.moneyShort(expense), Tints.of("rose", c.isDark), modifier = Modifier.weight(1f))
                 StatTile("Balance", Format.moneyShort(balance), Tints.of("sky", c.isDark), modifier = Modifier.weight(1f))
             }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(rows, key = { Format.long(it, "id") }) { row ->
-                    MmsCard {
-                        Row {
-                            Column(Modifier.weight(1f)) {
-                                CellText(Format.str(row, "description").ifBlank { Format.str(row, "receipt_number") }, strong = true, sub = Format.str(row, "txn_date") + " · " + Format.str(row, "receipt_number"))
+            if (rows.isEmpty()) {
+                EmptyState(I18n.t("common_no_data").ifBlank { "No records" }, "", "Add entry") { openForm() }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(rows, key = { Format.long(it, "id") }) { row ->
+                        val isInc = Format.str(row, "type") == "Income"
+                        val voided = Format.str(row, "status") == "Void"
+                        MmsCard(onClick = { detailRow = row }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TintTile(
+                                    if (isInc) G.UP else G.DOWN,
+                                    Tints.of(if (isInc) "em" else "rose", c.isDark), 38.dp
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    CellText(
+                                        Format.str(row, "description").ifBlank { Format.str(row, "receipt_number") },
+                                        strong = true,
+                                        sub = Format.str(row, "txn_date") + " · " + Format.str(row, "receipt_number")
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    androidx.compose.foundation.text.BasicText(
+                                        (if (isInc) "+" else "−") + Format.money(Format.num(row, "amount")),
+                                        style = MmsType.body.copy(
+                                            color = if (isInc) c.em else c.cRose,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
+                                    if (voided) {
+                                        Spacer(Modifier.height(4.dp))
+                                        StatusPill("Void", "Void")
+                                    }
+                                }
                             }
-                            val isInc = Format.str(row, "type") == "Income"
-                            androidx.compose.foundation.text.BasicText(
-                                (if (isInc) "+" else "−") + Format.money(Format.num(row, "amount")),
-                                style = MmsType.body.copy(color = if (isInc) c.em else c.cRose, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                            )
                         }
                     }
+                    item { Spacer(Modifier.height(90.dp)) }
                 }
-                item { Spacer(Modifier.height(80.dp)) }
             }
         }
     }
+
+    // ---- create
     if (show) {
         MmsDialog("New transaction", onDismiss = { show = false }, onConfirm = {
             scope.launch {
                 try {
-                    withContext(Dispatchers.IO) {
-                        repo.accountingCreate(mapOf("type" to txnType, "amount" to (amount.toDoubleOrNull() ?: 0.0), "description" to desc, "paymentMethod" to method, "txnDate" to Format.today()))
+                    val res = withContext(Dispatchers.IO) {
+                        repo.accountingCreate(
+                            mapOf(
+                                "type" to txnType, "amount" to (amount.toDoubleOrNull() ?: 0.0),
+                                "description" to desc, "paymentMethod" to method, "txnDate" to date,
+                                "payee" to payee, "billNo" to billNo, "transactionRef" to txnRef,
+                                "category" to category, "accountId" to if (accountId > 0) accountId else null
+                            )
+                        )
                     }
-                    show = false; reload(); toast("Entry saved", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
+                    show = false; reload(); toast("Entry ${res["voucherNo"]}", ToastMsg.Kind.Success)
+                } catch (e: Exception) {
+                    toast(e.message ?: "Error", ToastMsg.Kind.Error)
+                }
             }
-        }) {
-            MmsSelect(txnType, listOf("Income", "Expense"), { txnType = it }, label = "Type")
-            MmsInput(amount, { amount = it }, label = "Amount")
+        }, confirmEnabled = (amount.toDoubleOrNull() ?: 0.0) > 0) {
+            MmsSelect(txnType, listOf("Income", "Expense"), {
+                txnType = it; accountId = 0; accountLabel = ""
+            }, label = "Type")
+            MmsSelect(
+                accountLabel.ifBlank { "Auto ledger account" },
+                listOf("Auto ledger account") + typeAccounts.map { "${Format.str(it, "code")} — ${Format.str(it, "name")}" },
+                { label ->
+                    if (label == "Auto ledger account") {
+                        accountLabel = ""; accountId = 0
+                    } else {
+                        accountLabel = label
+                        val code = label.substringBefore(" —")
+                        accountId = typeAccounts.firstOrNull { Format.str(it, "code") == code }?.let { Format.long(it, "id") } ?: 0
+                    }
+                },
+                label = "Ledger account"
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsInput(amount, { amount = it }, label = "Amount", modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                MmsDateField(date, { date = it }, label = "Date", modifier = Modifier.weight(1f))
+            }
             MmsInput(desc, { desc = it }, label = "Description")
-            MmsSelect(method, listOf("Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"), { method = it }, label = "Method")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsSelect(method, listOf("Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"), { method = it }, label = "Method", modifier = Modifier.weight(1f))
+                MmsInput(payee, { payee = it }, label = "Payee", modifier = Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MmsInput(billNo, { billNo = it }, label = "Bill no", modifier = Modifier.weight(1f))
+                MmsInput(txnRef, { txnRef = it }, label = "Txn ref", modifier = Modifier.weight(1f))
+            }
+            MmsInput(category, { category = it }, label = "Category")
         }
     }
-}
 
-@Composable
-fun GenericCrudScreen(
-    title: String, subtitle: String,
-    filters: List<String> = listOf("All"),
-    load: suspend (String, String) -> List<Map<String, Any?>>,
-    titleOf: (Map<String, Any?>) -> String,
-    subOf: (Map<String, Any?>) -> String,
-    statusOf: (Map<String, Any?>) -> String = { "" },
-    amountOf: (Map<String, Any?>) -> String? = { null },
-    addLabel: String = "Add",
-    formFields: List<Pair<String, String>>, // label to key
-    onSave: suspend (Map<String, String>, Long?) -> Unit,
-    toast: (String, ToastMsg.Kind) -> Unit,
-    prefill: (Map<String, Any?>) -> Map<String, String> = { emptyMap() },
-) {
-    val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(filters.first()) }
-    var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    var show by remember { mutableStateOf(false) }
-    var editId by remember { mutableStateOf<Long?>(null) }
-    var fields by remember { mutableStateOf(formFields.associate { it.second to "" }.toMutableMap()) }
-    val c = C()
-    fun reload() = scope.launch { rows = withContext(Dispatchers.IO) { load(search, filter) } }
-    LaunchedEffect(search, filter) { reload() }
-    ModuleScaffold(title, subtitle, filters, filter, { filter = it }, search, { search = it }, onAdd = {
-        editId = null; fields = formFields.associate { it.second to "" }.toMutableMap(); show = true
-    }, addLabel = addLabel) {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(rows, key = { Format.long(it, "id") }) { row ->
-                MmsCard(onClick = {
-                    editId = Format.long(row, "id")
-                    val m = prefill(row).toMutableMap()
-                    formFields.forEach { (_, key) ->
-                        val snake = key.replace(Regex("([a-z])([A-Z])"), "$1_$2").lowercase()
-                        if (m[key].isNullOrBlank()) m[key] = Format.str(row, snake).ifBlank { Format.str(row, key) }
-                    }
-                    fields = m
-                    show = true
-                }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            CellText(titleOf(row), strong = true, sub = subOf(row))
-                        }
-                        val st = statusOf(row)
-                        if (st.isNotBlank()) StatusPill(st, st)
-                        amountOf(row)?.let {
-                            Spacer(Modifier.width(8.dp))
-                            androidx.compose.foundation.text.BasicText(it, style = MmsType.body.copy(color = c.em, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold))
-                        }
-                    }
-                }
-            }
-            item { Spacer(Modifier.height(80.dp)) }
-        }
-    }
-    if (show) {
-        MmsDialog(if (editId == null) addLabel else I18n.t("action_edit"), onDismiss = { show = false }, onConfirm = {
-            scope.launch {
-                try {
-                    withContext(Dispatchers.IO) { onSave(fields.toMap(), editId) }
-                    show = false; reload(); toast("Saved", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
-            }
-        }) {
-            formFields.forEach { (label, key) ->
-                MmsInput(fields[key] ?: "", { fields = fields.toMutableMap().also { m -> m[key] = it } }, label = label)
+    // ---- detail
+    if (detailRow != null) {
+        val row = detailRow!!
+        val voided = Format.str(row, "status") == "Void"
+        MmsDialog("Transaction", onDismiss = { detailRow = null }, compact = true) {
+            DetailRow("Voucher", Format.str(row, "voucher_no"), mono = true)
+            DetailRow("Receipt", Format.str(row, "receipt_number"), mono = true)
+            DetailRow("Type", Format.str(row, "type"))
+            DetailRow("Amount", Format.money(Format.num(row, "amount")), strong = true)
+            DetailRow("Date", Format.str(row, "txn_date"))
+            DetailRow("Description", Format.str(row, "description"))
+            DetailRow("Method", Format.str(row, "payment_method"))
+            DetailRow("Payee", Format.str(row, "payee"))
+            DetailRow("Bill", Format.str(row, "bill_no"))
+            DetailRow("By", Format.str(row, "created_by_name"))
+            if (voided) {
+                SectionLabel("Void info")
+                DetailRow("Reason", Format.str(row, "void_reason"))
+                DetailRow("By", Format.str(row, "voided_by_name"))
+                DetailRow("At", Format.str(row, "voided_at"))
+            } else {
+                MmsButton("Void transaction", {
+                    voidRow = row; voidReason = ""; adminPwd = ""
+                }, small = true, danger = true, ghost = true, modifier = Modifier.fillMaxWidth())
             }
         }
     }
-}
 
-@Composable fun StaffScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    GenericCrudScreen("Staff", "Employees & salary", listOf("All", "Active", "Resigned"),
-        load = { s, st -> repo.staffList(s, st).rows },
-        titleOf = { Format.str(it, "name") }, subOf = { Format.str(it, "staff_code") + " · " + Format.str(it, "role") },
-        statusOf = { Format.str(it, "status") },
-        addLabel = "Add staff",
-        formFields = listOf("Name" to "name", "Role" to "role", "Phone" to "phone", "Salary" to "salary"),
-        onSave = { f, id ->
-            val data = mapOf("name" to f["name"], "role" to (f["role"] ?: "Other"), "phone" to f["phone"], "salary" to (f["salary"]?.toDoubleOrNull() ?: 0.0))
-            if (id == null) repo.staffCreate(data) else repo.staffUpdate(id, data)
-        }, toast = toast)
-}
-
-@Composable fun CommitteeScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    GenericCrudScreen("Committee", "Elected & nominated members", listOf("All", "Active", "Past"),
-        load = { s, st -> repo.committeeList(s, st).rows },
-        titleOf = { Format.str(it, "name") }, subOf = { Format.str(it, "committee_code") + " · " + Format.str(it, "position") },
-        statusOf = { Format.str(it, "status") },
-        addLabel = "Add member",
-        formFields = listOf("Name" to "name", "Position" to "position", "Type" to "committeeType", "Phone" to "phone"),
-        onSave = { f, id ->
-            val data = mapOf("name" to f["name"], "position" to (f["position"] ?: "Committee Member"), "committeeType" to (f["committeeType"] ?: "Executive"), "phone" to f["phone"])
-            if (id == null) repo.committeeCreate(data) else repo.committeeUpdate(id, data)
-        }, toast = toast)
-}
-
-@Composable fun MarriagesScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    GenericCrudScreen(I18n.t("nav_marriage"), "Nikah register",
-        load = { s, _ -> repo.marriagesList(s).rows },
-        titleOf = { "${Format.str(it,"groom_name")}  ♥  ${Format.str(it,"bride_name")}" },
-        subOf = { Format.str(it, "marriage_number") + " · " + Format.str(it, "nikah_date") },
-        addLabel = "Add marriage",
-        formFields = listOf("Groom" to "groomName", "Groom father" to "groomFather", "Bride" to "brideName", "Bride father" to "brideFather", "Nikah date" to "nikahDate", "Place" to "place", "Mahar" to "mahar"),
-        onSave = { f, id ->
-            val data = f.mapValues { it.value as Any? } + mapOf("nikahDate" to (f["nikahDate"] ?: Format.today()))
-            if (id == null) repo.marriageCreate(data) else repo.marriageUpdate(id, data)
-        }, toast = toast)
-}
-
-@Composable fun DeathsScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    GenericCrudScreen(I18n.t("nav_death"), "Death register",
-        load = { s, _ -> repo.deathsList(s).rows },
-        titleOf = { Format.str(it, "deceased_name") },
-        subOf = { Format.str(it, "death_number") + " · " + Format.str(it, "date_of_death") },
-        addLabel = "Add record",
-        formFields = listOf("Name" to "deceasedName", "Father" to "fatherName", "Date of death" to "dateOfDeath", "Gender" to "gender", "Burial place" to "burialPlace", "Cause" to "causeOfDeath"),
-        onSave = { f, id ->
-            val data = f.mapValues { it.value as Any? } + mapOf("dateOfDeath" to (f["dateOfDeath"] ?: Format.today()), "gender" to (f["gender"] ?: "Male"))
-            if (id == null) repo.deathCreate(data) else repo.deathUpdate(id, data)
-        }, toast = toast)
-}
-
-@Composable fun WelfareScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("All") }
-    var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    var show by remember { mutableStateOf(false) }
-    var applicant by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("Financial Assistance") }
-    var amount by remember { mutableStateOf("") }
-    var reason by remember { mutableStateOf("") }
-    var actionId by remember { mutableStateOf<Long?>(null) }
-    var actionKind by remember { mutableStateOf("") }
-    var actionAmount by remember { mutableStateOf("") }
-    var actionReason by remember { mutableStateOf("") }
-    var adminPwd by remember { mutableStateOf("") }
-    val c = C()
-    fun reload() = scope.launch { rows = withContext(Dispatchers.IO) { repo.welfareList(search, status).rows } }
-    LaunchedEffect(search, status) { reload() }
-    ModuleScaffold(I18n.t("nav_welfare"), "Aid requests & disbursements", listOf("All", "Pending", "Approved", "Rejected", "Disbursed"), status, { status = it }, search, { search = it },
-        onAdd = { applicant = ""; amount = ""; reason = ""; category = "Financial Assistance"; show = true }, addLabel = "New request") {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(rows, key = { Format.long(it, "id") }) { row ->
-                MmsCard {
-                    Row {
-                        Column(Modifier.weight(1f)) {
-                            CellText(Format.str(row, "applicant_name"), strong = true, sub = Format.str(row, "request_number") + " · " + Format.str(row, "category"))
-                            androidx.compose.foundation.text.BasicText(Format.money(Format.num(row, "amount_requested")), style = MmsType.bodySm.copy(color = c.mut))
-                        }
-                        StatusPill(Format.str(row, "status"), Format.str(row, "status"))
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        val st = Format.str(row, "status")
-                        if (st == "Pending") {
-                            MmsButton("Approve", { actionId = Format.long(row, "id"); actionKind = "approve"; actionAmount = Format.num(row, "amount_requested").toString(); actionReason = "" }, small = true)
-                            MmsButton("Reject", { actionId = Format.long(row, "id"); actionKind = "reject"; actionReason = "" }, small = true, danger = true, ghost = true)
-                        }
-                        if (st == "Approved") {
-                            MmsButton("Disburse", { actionId = Format.long(row, "id"); actionKind = "disburse"; adminPwd = ""; actionReason = "" }, small = true)
-                        }
-                    }
-                }
-            }
-            item { Spacer(Modifier.height(80.dp)) }
-        }
-    }
-    if (show) {
-        MmsDialog("Welfare request", onDismiss = { show = false }, onConfirm = {
-            scope.launch {
-                try {
-                    withContext(Dispatchers.IO) {
-                        repo.welfareCreate(mapOf("applicantName" to applicant, "category" to category, "amountRequested" to (amount.toDoubleOrNull() ?: 0.0), "reason" to reason))
-                    }
-                    show = false; reload(); toast("Created", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
-            }
-        }) {
-            MmsInput(applicant, { applicant = it }, label = "Applicant")
-            MmsSelect(category, repo.welfareCategories(), { category = it }, label = "Category")
-            MmsInput(amount, { amount = it }, label = "Amount requested")
-            MmsInput(reason, { reason = it }, label = "Reason", singleLine = false)
-        }
-    }
-    if (actionId != null) {
-        MmsDialog(
-            actionKind.replaceFirstChar { it.uppercase() },
-            onDismiss = { actionId = null },
-            confirmLabel = actionKind.replaceFirstChar { it.uppercase() },
-            danger = actionKind == "reject",
+    // ---- void
+    if (voidRow != null) {
+        MmsDialog("Void transaction", onDismiss = { voidRow = null }, confirmLabel = "Void", danger = true, compact = true,
+            confirmEnabled = voidReason.isNotBlank() && adminPwd.isNotBlank(),
             onConfirm = {
                 scope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            when (actionKind) {
-                                "approve" -> repo.welfareApprove(actionId!!, actionAmount.toDoubleOrNull() ?: 0.0, actionReason, Format.today())
-                                "reject" -> repo.welfareReject(actionId!!, actionReason)
-                                "disburse" -> repo.welfareDisburse(actionId!!, actionReason, adminPwd)
-                                else -> Unit
-                            }
+                            repo.accountingVoid(Format.long(voidRow!!, "id"), voidReason, adminPwd)
                         }
-                        actionId = null; reload(); toast("Done", ToastMsg.Kind.Success)
-                    } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
-                }
-            },
-            compact = true
-        ) {
-            if (actionKind == "approve") MmsInput(actionAmount, { actionAmount = it }, label = "Approved amount")
-            if (actionKind == "disburse") MmsInput(adminPwd, { adminPwd = it }, label = "Admin password", password = true)
-            MmsInput(actionReason, { actionReason = it }, label = "Reason / notes", singleLine = false)
-        }
-    }
-}
-
-@Composable fun CertificatesScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
-    var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    var show by remember { mutableStateOf(false) }
-    var type by remember { mutableStateOf("Membership") }
-    var issuedTo by remember { mutableStateOf("") }
-    val c = C()
-    fun reload() = scope.launch { rows = withContext(Dispatchers.IO) { repo.certificatesList(search).rows } }
-    LaunchedEffect(search) { reload() }
-    ModuleScaffold(I18n.t("nav_certificates"), "Issue & verify certificates", listOf("All"), "All", {}, search, { search = it },
-        onAdd = { type = "Membership"; issuedTo = ""; show = true }, addLabel = "Issue") {
-        Column {
-            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Membership", "Residence", "Marriage", "Death").forEach { t ->
-                    MmsCard(modifier = Modifier.weight(1f), onClick = { type = t; issuedTo = ""; show = true }) {
-                        androidx.compose.foundation.text.BasicText(t, style = MmsType.bodySm.copy(color = c.tx, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold))
+                        voidRow = null; detailRow = null; reload(); toast("Transaction voided", ToastMsg.Kind.Success)
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Error", ToastMsg.Kind.Error)
                     }
-                }
-            }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(rows, key = { Format.long(it, "id") }) { row ->
-                    MmsCard {
-                        CellText(Format.str(row, "issued_to"), strong = true, sub = Format.str(row, "certificate_number") + " · " + Format.str(row, "type"))
-                        androidx.compose.foundation.text.BasicText("Verify: " + Format.str(row, "verification_code"), style = MmsType.caption.copy(color = c.em))
-                    }
-                }
-                item { Spacer(Modifier.height(80.dp)) }
-            }
-        }
-    }
-    if (show) {
-        MmsDialog("Issue $type certificate", onDismiss = { show = false }, onConfirm = {
-            scope.launch {
-                try {
-                    val r = withContext(Dispatchers.IO) { repo.certificateIssue(type, issuedTo) }
-                    show = false; reload(); toast("Issued ${r["certificateNumber"]}", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
-            }
-        }) {
-            MmsSelect(type, listOf("Membership", "Residence", "Marriage", "Death", "Character", "Income"), { type = it }, label = "Type")
-            MmsInput(issuedTo, { issuedTo = it }, label = "Issued to")
-        }
-    }
-}
-
-@Composable fun TokensScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    val scope = rememberCoroutineScope()
-    var events by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    var selected by remember { mutableStateOf<Long?>(null) }
-    var tokens by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    var stats by remember { mutableStateOf(mapOf<String, Any?>()) }
-    var showEvent by remember { mutableStateOf(false) }
-    var eventName by remember { mutableStateOf("") }
-    var eventDate by remember { mutableStateOf(Format.today()) }
-    val c = C()
-    fun reloadEvents() = scope.launch { events = withContext(Dispatchers.IO) { repo.tokenEventsList() } }
-    fun reloadTokens() = scope.launch {
-        val id = selected ?: return@launch
-        withContext(Dispatchers.IO) {
-            tokens = repo.tokensList(id)
-            stats = repo.tokenStats(id)
-        }
-    }
-    LaunchedEffect(Unit) { reloadEvents() }
-    LaunchedEffect(selected) { reloadTokens() }
-
-    if (selected == null) {
-        ModuleScaffold(I18n.t("nav_tokens"), "Token events & collection", onAdd = { eventName = ""; eventDate = Format.today(); showEvent = true }, addLabel = "New event",
-            filters = listOf("All"), selectedFilter = "All", onFilter = {}, search = "", onSearch = {}) {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(events, key = { Format.long(it, "id") }) { row ->
-                    MmsCard(onClick = { selected = Format.long(row, "id") }) {
-                        CellText(Format.str(row, "name"), strong = true, sub = Format.str(row, "event_date") + " · " + Format.long(row, "token_count") + " tokens")
-                    }
-                }
-            }
-        }
-        if (showEvent) {
-            MmsDialog("New token event", onDismiss = { showEvent = false }, onConfirm = {
-                scope.launch {
-                    withContext(Dispatchers.IO) { repo.tokenEventCreate(mapOf("name" to eventName, "eventDate" to eventDate)) }
-                    showEvent = false; reloadEvents(); toast("Event created", ToastMsg.Kind.Success)
                 }
             }) {
-                MmsInput(eventName, { eventName = it }, label = "Event name")
-                MmsInput(eventDate, { eventDate = it }, label = "Date (YYYY-MM-DD)")
-            }
-        }
-    } else {
-        ModuleScaffold("Tokens", "Collect & manage",
-            extraActions = {
-                MmsButton("Generate", {
-                    scope.launch {
-                        val n = withContext(Dispatchers.IO) {
-                            val fams = repo.familiesList(status = "Active").rows.map { Format.long(it, "id") }
-                            repo.tokensGenerate(selected!!, fams)
-                        }
-                        reloadTokens(); toast("Generated $n tokens", ToastMsg.Kind.Success)
-                    }
-                }, small = true)
-                MmsButton("Back", { selected = null }, small = true, primary = false)
-            },
-            filters = listOf("All"), selectedFilter = "All", onFilter = {}, search = "", onSearch = {}) {
-            Column {
-                Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatTile("Total", (stats["total"] ?: 0).toString(), Tints.of("pink", c.isDark), modifier = Modifier.weight(1f))
-                    StatTile("Collected", (stats["collected"] ?: 0).toString(), Tints.of("em", c.isDark), modifier = Modifier.weight(1f))
-                    StatTile("Pending", (stats["pending"] ?: 0).toString(), Tints.of("gold", c.isDark), modifier = Modifier.weight(1f))
-                }
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(tokens, key = { Format.long(it, "id") }) { row ->
-                        val st = Format.str(row, "status")
-                        MmsCard(onClick = {
-                            if (st == "Pending") scope.launch {
-                                withContext(Dispatchers.IO) { repo.tokenCollect(Format.long(row, "id")) }
-                                reloadTokens(); toast("Collected", ToastMsg.Kind.Success)
-                            }
-                        }) {
-                            Row {
-                                Column(Modifier.weight(1f)) {
-                                    CellText(Format.str(row, "token_code"), strong = true, sub = Format.str(row, "family_number") + " " + Format.str(row, "house_name"))
-                                }
-                                StatusPill(st, st)
-                            }
-                        }
-                    }
-                    item { Spacer(Modifier.height(80.dp)) }
-                }
-            }
+            InfoBanner("Voiding keeps the audit trail. The entry moves to the Voided list.", "warn")
+            MmsInput(voidReason, { voidReason = it }, label = "Void reason", singleLine = false)
+            MmsInput(adminPwd, { adminPwd = it }, label = "Administrator password", password = true)
         }
     }
 }
 
-@Composable fun AssetsScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    GenericCrudScreen(I18n.t("nav_assets"), "Buildings, land & rentable goods", listOf("All") + repo.assetCategories().take(4),
-        load = { s, cat -> repo.assetsList(s, if (cat == "All") null else cat).rows },
-        titleOf = { Format.str(it, "name") }, subOf = { Format.str(it, "asset_code") + " · " + Format.str(it, "category") },
-        statusOf = { Format.str(it, "status") },
-        amountOf = { Format.moneyShort(Format.num(it, "current_value")) },
-        addLabel = "Add asset",
-        formFields = listOf("Name" to "name", "Category" to "category", "Location" to "location", "Current value" to "currentValue", "Status" to "status"),
-        onSave = { f, id ->
-            val data = mapOf("name" to f["name"], "category" to (f["category"] ?: "Other"), "location" to f["location"], "currentValue" to (f["currentValue"]?.toDoubleOrNull() ?: 0.0), "status" to (f["status"] ?: "In use"))
-            if (id == null) repo.assetCreate(data) else repo.assetUpdate(id, data)
-        }, toast = toast)
-}
-
-@Composable fun UsersScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    val scope = rememberCoroutineScope()
-    var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    var show by remember { mutableStateOf(false) }
-    var username by remember { mutableStateOf("") }
-    var fullName by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var role by remember { mutableStateOf("Staff") }
-    val c = C()
-    fun reload() = scope.launch { rows = withContext(Dispatchers.IO) { repo.usersList() } }
-    LaunchedEffect(Unit) { reload() }
-    ModuleScaffold(I18n.t("nav_users"), "User accounts & roles", onAdd = { username = ""; fullName = ""; password = ""; role = "Staff"; show = true }, addLabel = "Add user",
-        filters = listOf("All"), selectedFilter = "All", onFilter = {}, search = "", onSearch = {}) {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(rows, key = { Format.long(it, "id") }) { row ->
-                MmsCard {
-                    Row {
-                        Column(Modifier.weight(1f)) {
-                            CellText(Format.str(row, "full_name"), strong = true, sub = "@" + Format.str(row, "username") + " · " + Format.str(row, "role"))
-                        }
-                        StatusPill(if (Format.long(row, "is_active") == 1L) "Active" else "Inactive", if (Format.long(row, "is_active") == 1L) "Active" else "Rejected")
-                    }
-                }
-            }
-        }
-    }
-    if (show) {
-        MmsDialog("New user", onDismiss = { show = false }, onConfirm = {
-            scope.launch {
-                try {
-                    withContext(Dispatchers.IO) { repo.userCreate(mapOf("username" to username, "fullName" to fullName, "password" to password, "role" to role)) }
-                    show = false; reload(); toast("User created", ToastMsg.Kind.Success)
-                } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
-            }
-        }) {
-            MmsInput(username, { username = it }, label = "Username")
-            MmsInput(fullName, { fullName = it }, label = "Full name")
-            MmsSelect(role, listOf("Administrator", "President", "Secretary", "Treasurer", "Imam", "Staff", "Auditor"), { role = it }, label = "Role")
-            MmsInput(password, { password = it }, label = "Password", password = true)
-        }
-    }
-}
-
-@Composable fun AuditScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
-    var rows by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    val c = C()
-    LaunchedEffect(search) { rows = withContext(Dispatchers.IO) { repo.auditList(search).rows } }
-    ModuleScaffold(I18n.t("nav_audit"), "Tamper-evident activity log", filters = listOf("All"), selectedFilter = "All", onFilter = {}, search = search, onSearch = { search = it }) {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(rows, key = { Format.long(it, "id") }) { row ->
-                MmsCard {
-                    CellText(Format.str(row, "action") + " · " + Format.str(row, "module"), strong = true, sub = Format.str(row, "description"))
-                    androidx.compose.foundation.text.BasicText(
-                        Format.str(row, "username") + " · " + Format.str(row, "created_at"),
-                        style = MmsType.caption.copy(color = c.fnt)
-                    )
-                }
-            }
-            item { Spacer(Modifier.height(80.dp)) }
-        }
-    }
-}
-
-@Composable fun SettingsScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var address by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var currency by remember { mutableStateOf("₹") }
-    var prefix by remember { mutableStateOf("RCP") }
-    var monthly by remember { mutableStateOf("100") }
-    val c = C()
-    LaunchedEffect(Unit) {
-        val s = withContext(Dispatchers.IO) { repo.settingsLoad() }
-        name = Format.str(s, "mahallu_name"); address = Format.str(s, "address")
-        phone = Format.str(s, "phone"); email = Format.str(s, "email")
-        currency = Format.str(s, "currency_symbol").ifBlank { "₹" }
-        prefix = Format.str(s, "receipt_prefix").ifBlank { "RCP" }
-        monthly = Format.num(s, "subscription_monthly_amount").toString()
-    }
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { PageHeader(I18n.t("nav_settings"), "Mahallu profile & preferences", T()) }
-        item {
-            MmsCard {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    MmsInput(name, { name = it }, label = "Mahallu name")
-                    MmsInput(address, { address = it }, label = "Address", singleLine = false)
-                    MmsInput(phone, { phone = it }, label = "Phone")
-                    MmsInput(email, { email = it }, label = "Email")
-                    MmsInput(currency, { currency = it }, label = "Currency symbol")
-                    MmsInput(prefix, { prefix = it }, label = "Receipt prefix")
-                    MmsInput(monthly, { monthly = it }, label = "Monthly subscription amount")
-                    MmsButton("Save settings", {
-                        scope.launch {
-                            try {
-                                withContext(Dispatchers.IO) {
-                                    repo.settingsSave(mapOf(
-                                        "mahalluName" to name, "address" to address, "phone" to phone, "email" to email,
-                                        "currencySymbol" to currency, "receiptPrefix" to prefix,
-                                        "subscriptionMonthlyAmount" to (monthly.toDoubleOrNull() ?: 100.0)
-                                    ))
-                                }
-                                toast("Settings saved", ToastMsg.Kind.Success)
-                            } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
-                        }
-                    }, modifier = Modifier.fillMaxWidth())
-                }
-            }
-        }
-    }
-}
-
-@Composable fun BackupScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val repo = MmsApp.instance.repo
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val dir = remember { File(ctx.getExternalFilesDir(null), "backups") }
-    var files by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
-    fun reload() = scope.launch { files = withContext(Dispatchers.IO) { repo.backupList(dir) } }
-    LaunchedEffect(Unit) { reload() }
-    val c = C()
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { PageHeader(I18n.t("nav_backup"), "Local encrypted-ready database backups", T()) }
-        item {
-            MmsButton("Create backup now", {
-                scope.launch {
-                    try {
-                        val f = withContext(Dispatchers.IO) { repo.backupCreate(dir) }
-                        reload(); toast("Backup ${f.name}", ToastMsg.Kind.Success)
-                    } catch (e: Exception) { toast(e.message ?: "Error", ToastMsg.Kind.Error) }
-                }
-            }, modifier = Modifier.fillMaxWidth())
-        }
-        items(files) { row ->
-            MmsCard {
-                CellText(Format.str(row, "name"), strong = true, sub = Format.str(row, "path"))
-                Spacer(Modifier.height(8.dp))
-                MmsButton("Restore", {
-                    scope.launch {
-                        val ok = withContext(Dispatchers.IO) { repo.backupRestore(File(Format.str(row, "path"))) }
-                        toast(if (ok) "Restored" else "Restore failed", if (ok) ToastMsg.Kind.Success else ToastMsg.Kind.Error)
-                    }
-                }, small = true, danger = true, ghost = true)
-            }
-        }
-    }
-}
-
-@Composable fun ReportsScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val c = C()
-    val reports = listOf(
-        Triple("Family directory", "All active families with member counts", "em"),
-        Triple("Member roll", "Complete member listing", "teal"),
-        Triple("Defaulters", "Pending & overdue subscriptions", "rose"),
-        Triple("Donation summary", "Month / year donation totals", "pink"),
-        Triple("Income & expense", "Financial year P&L", "sky"),
-        Triple("Marriage register", "Chronological nikah list", "vio"),
-        Triple("Death register", "Chronological death list", "slate"),
-        Triple("Welfare register", "Aid disbursed this year", "orange"),
-        Triple("Certificate log", "Issued certificates", "cyan"),
-    )
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { PageHeader(I18n.t("nav_reports"), "Printable registers & summaries", T()) }
-        items(reports) { (title, desc, tint) ->
-            val t = Tints.of(tint, c.isDark)
-            MmsCard(onClick = { toast("$title — open from desktop for PDF export; data is live in modules", ToastMsg.Kind.Info) }) {
-                androidx.compose.foundation.text.BasicText(title, style = MmsType.headline.copy(color = c.tx, fontSize = 15.sp))
-                androidx.compose.foundation.text.BasicText(desc, style = MmsType.caption.copy(color = c.mut))
-            }
-        }
-    }
-}
-
-@Composable fun WhatsAppScreen(toast: (String, ToastMsg.Kind) -> Unit) {
-    val c = C()
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { PageHeader(I18n.t("nav_whatsapp"), "Receipt delivery & announcements", T()) }
-        item {
-            MmsCard {
-                androidx.compose.foundation.text.BasicText("WhatsApp linking", style = MmsType.headline.copy(color = c.tx))
-                Spacer(Modifier.height(8.dp))
-                androidx.compose.foundation.text.BasicText(
-                    "The desktop app pairs via Baileys QR for receipt delivery. On Android, use the share sheet from donation/subscription detail to send receipts through the system WhatsApp app. Family WhatsApp numbers are stored in each family record.",
-                    style = MmsType.bodySm.copy(color = c.mut)
-                )
-                Spacer(Modifier.height(12.dp))
-                StatusPill("Mobile share mode", "Active")
-            }
-        }
-        item {
-            MmsCard {
-                androidx.compose.foundation.text.BasicText("How to send a receipt", style = MmsType.headline.copy(color = c.tx))
-                listOf(
-                    "1. Open Donations or Subscriptions",
-                    "2. Record a payment (receipt number auto-assigned)",
-                    "3. Use Android Share to send via WhatsApp",
-                    "4. Family whatsapp_phone is used when set",
-                ).forEach {
-                    androidx.compose.foundation.text.BasicText(it, style = MmsType.bodySm.copy(color = c.mut), modifier = Modifier.padding(vertical = 4.dp))
-                }
-            }
-        }
-    }
-}

@@ -1,10 +1,13 @@
 package com.mms.minzmahallu.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mms.minzmahallu.MmsApp
@@ -47,6 +51,7 @@ fun MmsRoot(modifier: Modifier = Modifier) {
     var needsSetup by remember { mutableStateOf(false) }
     var dest by remember { mutableStateOf(Dest.Dashboard) }
     var drawerOpen by remember { mutableStateOf(false) }
+    var navArg by remember { mutableStateOf("") }
     val toasts = remember { mutableStateListOf<ToastMsg>() }
     val lang by I18n.lang.collectAsState()
 
@@ -55,7 +60,6 @@ fun MmsRoot(modifier: Modifier = Modifier) {
     }
 
     LaunchedEffect(Unit) {
-        // Guard against repo not ready – show error instead of crashing
         if (repo == null) {
             initError = app.initError ?: IllegalStateException("Database not initialised")
             kotlinx.coroutines.delay(600)
@@ -78,7 +82,6 @@ fun MmsRoot(modifier: Modifier = Modifier) {
             }
             needsSetup = setup
             val theme = Format.str(s, "theme")
-            // theme / lang must run on Main
             MmsThemeController.setDark(theme == "dark")
             val l = Format.str(s, "language")
             if (l in listOf("en", "ml")) I18n.setLang(ctx, l)
@@ -92,12 +95,6 @@ fun MmsRoot(modifier: Modifier = Modifier) {
     }
 
     val c = C()
-    // If the repository is unavailable (DB failed to init), show a non-crash error
-    // screen instead of Login loops. This early return is also what makes every
-    // `repo` usage below compile: after it, Kotlin smart-casts the local `repo`
-    // val to a non-null MmsRepository — including inside the lambdas passed to
-    // LoginScreen and AppShell (a captured val can't be re-assigned, so the
-    // smart cast stays valid there).
     if (repo == null) {
         Box(modifier.background(c.bodyBg)) {
             Column(
@@ -147,7 +144,7 @@ fun MmsRoot(modifier: Modifier = Modifier) {
                             val a = withContext(Dispatchers.IO) { repo.auth.createInitialAdministrator(u, n, p) }
                             user = a
                             needsSetup = false
-                            toast("Administrator created")
+                            toast("Administrator created ✓")
                         } catch (e: Exception) {
                             toast(e.message ?: "Setup failed", ToastMsg.Kind.Error)
                         }
@@ -158,27 +155,37 @@ fun MmsRoot(modifier: Modifier = Modifier) {
                 user = user!!,
                 dest = dest,
                 drawerOpen = drawerOpen,
-                onDest = { dest = it; drawerOpen = false },
+                navArg = navArg,
+                onDest = { d, arg ->
+                    dest = d
+                    navArg = arg
+                    drawerOpen = false
+                },
                 onToggleDrawer = { drawerOpen = !drawerOpen },
                 onLogout = {
                     repo.auth.logout()
                     user = null
                     dest = Dest.Dashboard
+                    navArg = ""
                 },
                 onToggleLang = {
                     I18n.toggle(ctx)
                     scope.launch(Dispatchers.IO) {
-                        val s = repo.settingsLoad().toMutableMap()
-                        s["language"] = I18n.lang.value
-                        repo.settingsSave(s)
+                        try {
+                            val s = repo.settingsLoad().toMutableMap()
+                            s["language"] = I18n.lang.value
+                            repo.settingsSave(s)
+                        } catch (_: Exception) { }
                     }
                 },
                 onToggleTheme = {
                     MmsThemeController.toggle()
                     scope.launch(Dispatchers.IO) {
-                        val s = repo.settingsLoad().toMutableMap()
-                        s["theme"] = if (MmsThemeController.dark.value) "dark" else "light"
-                        repo.settingsSave(s)
+                        try {
+                            val s = repo.settingsLoad().toMutableMap()
+                            s["theme"] = if (MmsThemeController.dark.value) "dark" else "light"
+                            repo.settingsSave(s)
+                        } catch (_: Exception) { }
                     }
                 },
                 toast = ::toast,
@@ -193,7 +200,8 @@ private fun AppShell(
     user: AuthUser,
     dest: Dest,
     drawerOpen: Boolean,
-    onDest: (Dest) -> Unit,
+    navArg: String,
+    onDest: (Dest, String) -> Unit,
     onToggleDrawer: () -> Unit,
     onLogout: () -> Unit,
     onToggleLang: () -> Unit,
@@ -203,143 +211,145 @@ private fun AppShell(
     val c = C()
     val lang by I18n.lang.collectAsState()
     val tint = Tints.of(dest.tint, c.isDark)
+    var searchOpen by remember { mutableStateOf(false) }
+    var alertsOpen by remember { mutableStateOf(false) }
+    var meOpen by remember { mutableStateOf(false) }
+    var alerts by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
+    val scope = rememberCoroutineScope()
+
+    fun go(d: Dest) = onDest(d, "")
+    fun reloadAlerts() = scope.launch {
+        try {
+            alerts = withContext(Dispatchers.IO) { MmsApp.instance.repo.alerts() }
+        } catch (_: Exception) { }
+    }
+    LaunchedEffect(dest) { reloadAlerts() }
+
+    BackHandler(enabled = searchOpen) { searchOpen = false }
+    BackHandler(enabled = drawerOpen && !searchOpen) { onToggleDrawer() }
+
     CompositionLocalProvider(LocalTint provides tint) {
-        Column(Modifier.fillMaxSize().background(
-            Brush.verticalGradient(listOf(
-                c.cSky.copy(0.04f),
-                c.bodyBg,
-                c.em.copy(0.04f)
-            ))
-        )) {
-            // Modern Top Bar with Glass Effect
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(72.dp)
-                    .background(
-                        Brush.horizontalGradient(
-                            listOf(
-                                c.panel.copy(alpha = 0.95f),
-                                c.panel.copy(alpha = 0.92f)
-                            )
+        Box(Modifier.fillMaxSize().background(c.bodyBg)) {
+            Column(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(
+                        listOf(
+                            c.cSky.copy(0.04f),
+                            c.bodyBg,
+                            c.em.copy(0.04f)
                         )
                     )
-                    .shadow(8.dp, ambientColor = c.shadowMd, spotColor = c.shadowMd)
-                    .border(1.dp, c.line.copy(alpha = 0.3f))
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
+                )
             ) {
-                // Menu Button
-                MmsIconButton(onClick = onToggleDrawer) {
-                    Box(
-                        Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(c.panel2)
-                            .border(1.dp, c.line, RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        androidx.compose.foundation.text.BasicText("⋮", style = TextStyle(color = c.tx, fontSize = 22.sp, fontWeight = FontWeight.Bold))
-                    }
-                }
-                Spacer(Modifier.width(14.dp))
-                
-                // App Logo with Gradient
-                Box(
-                    Modifier
-                        .size(42.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Brush.linearGradient(listOf(c.emLight, c.em)))
-                        .shadow(4.dp, RoundedCornerShape(14.dp), ambientColor = c.glowEmerald),
-                    contentAlignment = Alignment.Center
-                ) {
-                    androidx.compose.foundation.text.BasicText("M", style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp))
-                }
-                Spacer(Modifier.width(14.dp))
-                
-                // Title Section
-                Column(Modifier.weight(1f)) {
-                    androidx.compose.foundation.text.BasicText(
-                        I18n.t(dest.titleKey),
-                        style = MmsType.title.copy(color = c.tx, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                    )
-                    androidx.compose.foundation.text.BasicText(
-                        I18n.t("app_name"),
-                        style = MmsType.caption.copy(color = c.mut, fontSize = 10.sp, letterSpacing = 1.sp)
-                    )
-                }
-                
-                // Language Toggle - Pill Design
+                // ---- top bar
                 Row(
                     Modifier
-                        .clip(RoundedCornerShape(99.dp))
-                        .background(c.panel2)
-                        .border(1.dp, c.line, RoundedCornerShape(99.dp))
-                        .padding(4.dp)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .height(64.dp)
+                        .background(c.panel.copy(alpha = 0.96f))
+                        .border(1.dp, c.line.copy(alpha = 0.4f))
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    listOf("en" to "EN", "ml" to "മല").forEach { (code, label) ->
-                        val on = lang == code
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(99.dp))
-                                .background(if (on) Brush.horizontalGradient(listOf(c.emLight, c.em)) else Color.Transparent)
-                                .mmsClickable { if (!on) onToggleLang() }
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
+                    TopIconBtn(onToggleDrawer) {
+                        androidx.compose.foundation.text.BasicText(
+                            "☰",
+                            style = TextStyle(color = c.tx, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        )
+                    }
+                    Box(
+                        Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Brush.linearGradient(listOf(c.emLight, c.em))),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.foundation.text.BasicText(
+                            "M",
+                            style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        androidx.compose.foundation.text.BasicText(
+                            I18n.t(dest.titleKey),
+                            style = MmsType.title.copy(color = c.tx, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                        androidx.compose.foundation.text.BasicText(
+                            I18n.t("app_name"),
+                            style = MmsType.caption.copy(color = c.mut, fontSize = 9.sp, letterSpacing = 1.sp),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    TopIconBtn({ searchOpen = true }) {
+                        androidx.compose.foundation.text.BasicText(G.SEARCH, style = TextStyle(color = c.tx, fontSize = 16.sp, fontWeight = FontWeight.Bold))
+                    }
+                    // alerts bell with badge
+                    Box {
+                        TopIconBtn({ reloadAlerts(); alertsOpen = true }) {
                             androidx.compose.foundation.text.BasicText(
-                                label,
+                                G.DOT,
                                 style = TextStyle(
-                                    color = if (on) Color.White else c.mut,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium
+                                    color = if (alerts.isNotEmpty()) c.amber else c.fnt,
+                                    fontSize = 16.sp
                                 )
                             )
                         }
+                        if (alerts.isNotEmpty()) {
+                            Box(
+                                Modifier.align(Alignment.TopEnd)
+                                    .clip(CircleShape)
+                                    .background(c.cRose)
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                            ) {
+                                androidx.compose.foundation.text.BasicText(
+                                    alerts.size.toString(),
+                                    style = TextStyle(color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
                     }
-                }
-                Spacer(Modifier.width(10.dp))
-                
-                // Theme Toggle
-                MmsIconButton(onClick = onToggleTheme) {
+                    // compact language toggle
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(c.panel2)
+                            .border(1.dp, c.line, RoundedCornerShape(99.dp))
+                            .mmsClickable(onClick = onToggleLang)
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                    ) {
+                        androidx.compose.foundation.text.BasicText(
+                            if (lang == "ml") "മല" else "EN",
+                            style = TextStyle(color = c.emd, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    TopIconBtn(onToggleTheme) {
+                        androidx.compose.foundation.text.BasicText(
+                            if (c.isDark) "☀" else "☾",
+                            style = TextStyle(fontSize = 16.sp, color = c.tx)
+                        )
+                    }
                     Box(
                         Modifier
                             .size(36.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(c.panel2)
-                            .border(1.dp, c.line, RoundedCornerShape(10.dp)),
+                            .clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(c.skyLight, c.sky)))
+                            .border(2.dp, c.panel, CircleShape)
+                            .mmsClickable { meOpen = true },
                         contentAlignment = Alignment.Center
                     ) {
-                        androidx.compose.foundation.text.BasicText(if (c.isDark) "☀" else "☾", style = TextStyle(fontSize = 18.sp, color = c.tx))
+                        androidx.compose.foundation.text.BasicText(
+                            user.initials,
+                            style = TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        )
                     }
                 }
-                Spacer(Modifier.width(10.dp))
-                
-                // User Avatar with Gradient Ring
-                Box(
-                    Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(c.skyLight, c.sky)))
-                        .border(2.dp, c.panel, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    androidx.compose.foundation.text.BasicText(
-                        user.initials,
-                        style = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    )
-                }
-            }
 
-            Box(Modifier.fillMaxSize()) {
-                // Content
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(start = if (drawerOpen) 0.dp else 0.dp)
-                        .background(
-                            Brush.radialGradient(listOf(c.cEm.copy(0.03f), Color.Transparent))
-                        )
-                ) {
+                // ---- content
+                Box(Modifier.fillMaxSize().navigationBarsPadding()) {
                     AnimatedContent(
                         targetState = dest,
                         transitionSpec = {
@@ -348,39 +358,185 @@ private fun AppShell(
                         },
                         label = "page"
                     ) { d ->
-                        ModuleHost(d, toast = { m, k -> toast(m, k) }, onNavigate = onDest)
+                        ModuleHost(d, navArg, toast = { m, k -> toast(m, k) }, onNavigate = { go(it) })
+                    }
+
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = drawerOpen,
+                        enter = fadeIn(tween(160)),
+                        exit = fadeOut(tween(140))
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFF0D1521).copy(0.35f))
+                                .mmsClickable(onClick = onToggleDrawer)
+                        )
+                    }
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = drawerOpen,
+                        enter = slideInHorizontally(tween(260)) { -it } + fadeIn(),
+                        exit = slideOutHorizontally(tween(200)) { -it } + fadeOut()
+                    ) {
+                        SideDrawer(
+                            user = user,
+                            dest = dest,
+                            onDest = { go(it) },
+                            onLogout = onLogout,
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(280.dp)
+                                .statusBarsPadding()
+                                .padding(12.dp)
+                        )
                     }
                 }
+            }
 
-                // Drawer overlay
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = drawerOpen,
-                    enter = fadeIn(tween(160)),
-                    exit = fadeOut(tween(140))
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(Color(0xFF0D1521).copy(0.35f))
-                            .mmsClickable(onClick = onToggleDrawer)
-                    )
+            // ---- global search overlay
+            androidx.compose.animation.AnimatedVisibility(
+                visible = searchOpen,
+                enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { -it / 6 },
+                exit = fadeOut(tween(150))
+            ) {
+                SearchOverlay(
+                    onClose = { searchOpen = false },
+                    onPick = { d, arg ->
+                        searchOpen = false
+                        onDest(d, arg)
+                    }
+                )
+            }
+        }
+
+        // ---- alerts dialog
+        if (alertsOpen) {
+            MmsDialog("Attention needed", onDismiss = { alertsOpen = false }, compact = true) {
+                if (alerts.isEmpty()) {
+                    InfoBanner("All clear — no overdue dues or pending requests.", "success")
+                } else {
+                    alerts.forEach { a ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                androidx.compose.foundation.text.BasicText(
+                                    Format.str(a, "message"),
+                                    style = MmsType.bodySm.copy(color = c.tx, fontWeight = FontWeight.Medium)
+                                )
+                            }
+                            MmsButton("View", {
+                                alertsOpen = false
+                                go(if (Format.str(a, "type") == "welfare") Dest.Welfare else Dest.Subscriptions)
+                            }, small = true, primary = false)
+                        }
+                    }
                 }
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = drawerOpen,
-                    enter = slideInHorizontally(tween(260)) { -it } + fadeIn(),
-                    exit = slideOutHorizontally(tween(200)) { -it } + fadeOut()
-                ) {
-                    SideDrawer(
-                        user = user,
-                        dest = dest,
-                        onDest = onDest,
-                        onLogout = onLogout,
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(280.dp)
-                            .padding(12.dp)
-                    )
+            }
+        }
+
+        // ---- user menu
+        if (meOpen) {
+            MmsDialog("Signed in", onDismiss = { meOpen = false }, compact = true) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TintTile(user.initials.take(1), Tints.of("sky", c.isDark), 44.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        androidx.compose.foundation.text.BasicText(
+                            user.fullName,
+                            style = MmsType.headline.copy(color = c.tx, fontWeight = FontWeight.Bold)
+                        )
+                        androidx.compose.foundation.text.BasicText(
+                            "@${user.username} · ${user.role}",
+                            style = MmsType.caption.copy(color = c.mut)
+                        )
+                    }
                 }
+                Spacer(Modifier.height(8.dp))
+                MmsButton("My settings & password", { meOpen = false; go(Dest.Settings) }, small = true, primary = false, modifier = Modifier.fillMaxWidth())
+                MmsButton("Logout", { meOpen = false; onLogout() }, small = true, danger = true, ghost = true, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopIconBtn(onClick: () -> Unit, content: @Composable () -> Unit) {
+    val c = C()
+    Box(
+        Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(c.panel2)
+            .border(1.dp, c.line, RoundedCornerShape(11.dp))
+            .mmsClickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) { content() }
+    Spacer(Modifier.width(6.dp))
+}
+
+@Composable
+private fun SearchOverlay(onClose: () -> Unit, onPick: (Dest, String) -> Unit) {
+    val c = C()
+    val scope = rememberCoroutineScope()
+    var q by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf(listOf<Map<String, Any?>>()) }
+    var busy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(q) {
+        if (q.length < 2) {
+            results = emptyList()
+            return@LaunchedEffect
+        }
+        busy = true
+        try {
+            results = withContext(Dispatchers.IO) { MmsApp.instance.repo.globalSearch(q) }
+        } catch (_: Exception) { }
+        busy = false
+    }
+
+    Box(
+        Modifier.fillMaxSize().background(c.bodyBg).statusBarsPadding()
+    ) {
+        Column(Modifier.fillMaxSize().padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TopIconBtn(onClose) {
+                    androidx.compose.foundation.text.BasicText(G.LEFT, style = TextStyle(color = c.tx, fontSize = 17.sp, fontWeight = FontWeight.Bold))
+                }
+                SearchField(q, { q = it }, Modifier.weight(1f), placeholder = "Search families, members, receipts…")
+            }
+            Spacer(Modifier.height(12.dp))
+            if (busy) {
+                LoadingList(3)
+            } else if (q.length >= 2 && results.isEmpty()) {
+                EmptyState("No matches", "Try a name, code, phone or receipt number")
+            } else if (results.isNotEmpty()) {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(results) { r ->
+                        val kind = Format.str(r, "kind")
+                        val (d, tintId) = when (kind) {
+                            "family" -> Dest.Families to "em"
+                            "member" -> Dest.Members to "teal"
+                            else -> Dest.Donations to "pink"
+                        }
+                        MmsCard(onClick = { onPick(d, Format.str(r, "code")) }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TintTile(
+                                    Format.str(r, "title").ifBlank { "?" }.take(1),
+                                    Tints.of(tintId, c.isDark), 38.dp
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    CellText(Format.str(r, "title"), strong = true, sub = Format.str(r, "code"))
+                                }
+                                StatusPill(kind.replaceFirstChar { it.uppercase() }, "default")
+                            }
+                        }
+                    }
+                }
+            } else {
+                EmptyState("Global search", "Type at least 2 characters to search everything")
             }
         }
     }
@@ -396,50 +552,45 @@ private fun SideDrawer(
 ) {
     val c = C()
     val lang by I18n.lang.collectAsState()
-    val sectionMl = mapOf("Management" to "മാനേജ്മെന്റ്", "Finance" to "സാമ്പത്തികം", "Registers" to "രജിസ്റ്ററുകൾ", "System" to "സിസ്റ്റം")
-    
-    // Modern Drawer with Gradient Header
+    val sectionMl = mapOf(
+        "Management" to "മാനേജ്മെന്റ്",
+        "Finance" to "സാമ്പത്തികം",
+        "Registers" to "രജിസ്റ്ററുകൾ",
+        "System" to "സിസ്റ്റം"
+    )
+
     Column(
         modifier
             .shadow(24.dp, RoundedCornerShape(20.dp))
             .clip(RoundedCornerShape(20.dp))
-            .background(
-                Brush.verticalGradient(
-                    listOf(c.panel.copy(alpha = 0.98f), c.panel)
-                )
-            )
+            .background(Brush.verticalGradient(listOf(c.panel.copy(alpha = 0.98f), c.panel)))
             .border(1.5.dp, c.line.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
     ) {
-        // User Profile Header
         Box(
             Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(c.em.copy(alpha = 0.12f), Color.Transparent)
-                    )
-                )
+                .background(Brush.verticalGradient(listOf(c.em.copy(alpha = 0.12f), Color.Transparent)))
                 .padding(20.dp)
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(
                     Modifier
-                        .size(64.dp)
+                        .size(60.dp)
                         .clip(CircleShape)
                         .background(Brush.linearGradient(listOf(c.skyLight, c.sky)))
-                        .border(3.dp, c.panel, CircleShape)
-                        .shadow(8.dp, CircleShape, ambientColor = c.glowSky),
+                        .border(3.dp, c.panel, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     androidx.compose.foundation.text.BasicText(
                         user.initials,
-                        style = TextStyle(color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        style = TextStyle(color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     )
                 }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
                 androidx.compose.foundation.text.BasicText(
                     user.fullName,
-                    style = MmsType.title.copy(color = c.tx, fontWeight = FontWeight.SemiBold)
+                    style = MmsType.title.copy(color = c.tx, fontWeight = FontWeight.SemiBold, fontSize = 17.sp),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(4.dp))
                 Box(
@@ -456,17 +607,23 @@ private fun SideDrawer(
                 }
             }
         }
-        
+
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.line.copy(alpha = 0.5f)))
-        
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 12.dp)) {
+
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
             var lastSec: String? = null
             Dest.all.forEach { d ->
                 val sec = d.section
                 if (sec != null && sec != lastSec) {
                     lastSec = sec
                     val label = if (lang == "ml") sectionMl[sec] ?: sec else sec
-                    Row(Modifier.padding(top = 16.dp, bottom = 8.dp, start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.padding(top = 14.dp, bottom = 6.dp, start = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(Modifier.width(3.dp).height(14.dp).clip(RoundedCornerShape(2.dp)).background(c.em))
                         Spacer(Modifier.width(8.dp))
                         androidx.compose.foundation.text.BasicText(
@@ -479,43 +636,22 @@ private fun SideDrawer(
                 }
                 val on = dest == d
                 val tint = Tints.of(d.tint, c.isDark)
-                
-                // Modern Nav Item with Gradient Active State
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 3.dp)
+                        .padding(vertical = 2.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(
                             if (on) Brush.horizontalGradient(listOf(tint.sb, tint.sb.copy(alpha = 0.5f)))
-                            else Color.Transparent
+                            else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
                         )
                         .then(if (on) Modifier.border(1.5.dp, tint.sl.copy(alpha = 0.6f), RoundedCornerShape(14.dp)) else Modifier)
                         .mmsClickable { onDest(d) }
-                        .padding(horizontal = 12.dp, vertical = 11.dp),
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        Modifier
-                            .size(36.dp)
-                            .clip(RoundedCornerShape(11.dp))
-                            .background(
-                                if (on) Brush.linearGradient(listOf(tint.sc, tint.sc.copy(alpha = 0.8f)))
-                                else tint.sb
-                            )
-                            .then(if (on) Modifier.shadow(4.dp, RoundedCornerShape(11.dp), ambientColor = tint.sc.copy(0.3f)) else Modifier),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        androidx.compose.foundation.text.BasicText(
-                            d.route.take(1).uppercase(),
-                            style = TextStyle(
-                                color = if (on) Color.White else tint.sc,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        )
-                    }
-                    Spacer(Modifier.width(13.dp))
+                    TintTile(d.route.take(1), tint, 34.dp, 10.dp)
+                    Spacer(Modifier.width(12.dp))
                     androidx.compose.foundation.text.BasicText(
                         I18n.t(d.titleKey),
                         style = MmsType.body.copy(
@@ -523,46 +659,44 @@ private fun SideDrawer(
                             fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
                             fontSize = 14.sp
                         ),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                     if (on) {
-                        Box(
-                            Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Brush.linearGradient(listOf(tint.sc, Color.White)))
-                        )
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(tint.sc))
                     }
                 }
             }
         }
-        
+
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.line.copy(alpha = 0.5f)))
-        
-        // Logout Section
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            MmsButton(
-                "Logout",
-                onLogout,
-                modifier = Modifier.weight(1f),
-                small = true,
-                danger = true,
-                icon = "⎋"
-            )
+
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            MmsButton("Logout", onLogout, modifier = Modifier.weight(1f), small = true, danger = true, icon = "⎋")
         }
+        androidx.compose.foundation.text.BasicText(
+            "v2.0.0 · Android",
+            style = MmsType.caption.copy(color = c.fnt),
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp)
+        )
     }
 }
 
 @Composable
-private fun ModuleHost(dest: Dest, toast: (String, ToastMsg.Kind) -> Unit, onNavigate: (Dest) -> Unit) {
+private fun ModuleHost(
+    dest: Dest,
+    navArg: String,
+    toast: (String, ToastMsg.Kind) -> Unit,
+    onNavigate: (Dest) -> Unit,
+) {
     when (dest) {
         Dest.Dashboard -> DashboardScreen(toast = toast, onNavigate = onNavigate)
-        Dest.Families -> FamiliesScreen(toast = toast)
-        Dest.Members -> MembersScreen(toast = toast)
+        Dest.Families -> FamiliesScreen(toast = toast, initialSearch = navArg)
+        Dest.Members -> MembersScreen(toast = toast, initialSearch = navArg)
         Dest.Staff -> StaffScreen(toast = toast)
         Dest.Committee -> CommitteeScreen(toast = toast)
-        Dest.Subscriptions -> SubscriptionsScreen(toast = toast)
-        Dest.Donations -> DonationsScreen(toast = toast)
+        Dest.Subscriptions -> SubscriptionsScreen(toast = toast, initialSearch = navArg)
+        Dest.Donations -> DonationsScreen(toast = toast, initialSearch = navArg)
         Dest.WhatsApp -> WhatsAppScreen(toast = toast)
         Dest.Accounting -> AccountingScreen(toast = toast)
         Dest.Assets -> AssetsScreen(toast = toast)
