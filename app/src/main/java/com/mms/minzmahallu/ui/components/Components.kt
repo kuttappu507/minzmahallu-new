@@ -60,18 +60,29 @@ fun MmsCard(
     modifier: Modifier = Modifier,
     tint: ModuleTint? = null,
     onClick: (() -> Unit)? = null,
+    elevated: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val c = C()
     var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, spring(stiffness = Spring.StiffnessMedium), label = "card")
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, spring(stiffness = Spring.StiffnessMedium), label = "card")
+    val shadowElevation = if (elevated) 12.dp else 4.dp
+    val shadowColor = if (c.isDark) c.shadowMd else c.shadowLg
+    
     Column(
         modifier = modifier
             .scale(scale)
-            .shadow(8.dp, RoundedCornerShape(14.dp), ambientColor = Color.Black.copy(0.06f), spotColor = Color.Black.copy(0.12f))
-            .clip(RoundedCornerShape(14.dp))
-            .background(c.panel)
-            .border(1.dp, c.line, RoundedCornerShape(14.dp))
+            .shadow(shadowElevation, RoundedCornerShape(16.dp), ambientColor = shadowColor, spotColor = shadowColor)
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        c.panel.copy(alpha = 0.95f),
+                        c.panel
+                    )
+                )
+            )
+            .border(1.dp, c.line.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
             .then(if (onClick != null) Modifier.pointerInput(Unit) {
                 detectTapGestures(onPress = {
                     pressed = true
@@ -80,7 +91,7 @@ fun MmsCard(
                     onClick()
                 })
             } else Modifier)
-            .padding(16.dp),
+            .padding(18.dp),
         content = content
     )
 }
@@ -95,10 +106,19 @@ fun MmsButton(
     enabled: Boolean = true,
     ghost: Boolean = false,
     small: Boolean = false,
+    icon: String? = null,
 ) {
     val c = C()
     var pressed by remember { mutableStateOf(false) }
-    val y by animateFloatAsState(if (pressed) 1f else 0f, tween(100), label = "btn")
+    val scale by animateFloatAsState(if (pressed) 0.95f else 1f, spring(stiffness = Spring.StiffnessMedium), label = "btn")
+    val y by animateFloatAsState(if (pressed) 1f else 0f, tween(80), label = "btnY")
+    
+    val gradient = when {
+        danger && !ghost -> Brush.horizontalGradient(listOf(c.rose, c.rosd))
+        primary && !ghost -> Brush.horizontalGradient(listOf(c.emLight, c.em))
+        else -> null
+    }
+    
     val bg = when {
         !enabled -> c.line
         danger && ghost -> c.panel
@@ -114,17 +134,20 @@ fun MmsButton(
     }
     val borderCol = when {
         danger && ghost -> c.roseLine
-        primary && !ghost -> c.emdd
-        else -> c.line2
+        primary && !ghost -> Color.Transparent
+        ghost -> c.line2
+        else -> c.line
     }
+    
     Box(
         modifier = modifier
-            .height(if (small) 34.dp else 42.dp)
+            .height(if (small) 36.dp else 44.dp)
+            .scale(scale)
             .offset(y = y.dp)
-            .shadow(if (pressed || !enabled) 0.dp else 2.dp, RoundedCornerShape(if (small) 99.dp else 11.dp))
-            .clip(RoundedCornerShape(if (small) 99.dp else 11.dp))
-            .background(bg)
-            .border(1.5.dp, borderCol, RoundedCornerShape(if (small) 99.dp else 11.dp))
+            .shadow(if (pressed || !enabled) 0.dp else if (primary && !ghost) 8.dp else 2.dp, RoundedCornerShape(if (small) 99.dp else 12.dp), ambientColor = if (primary && !ghost) c.glowEmerald else Color.Transparent)
+            .clip(RoundedCornerShape(if (small) 99.dp else 12.dp))
+            .then(if (gradient != null) Modifier.background(gradient) else Modifier.background(bg))
+            .border(if (ghost) 1.5.dp else 0.dp, borderCol, RoundedCornerShape(if (small) 99.dp else 12.dp))
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 detectTapGestures(onPress = {
@@ -134,17 +157,29 @@ fun MmsButton(
                     onClick()
                 })
             }
-            .padding(horizontal = if (small) 12.dp else 17.dp),
+            .padding(horizontal = if (small) 14.dp else 18.dp),
         contentAlignment = Alignment.Center
     ) {
-        androidx.compose.foundation.text.BasicText(
-            text = text,
-            style = TextStyle(
-                color = fg,
-                fontSize = if (small) 12.5.sp else 13.sp,
-                fontWeight = FontWeight.Medium
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                androidx.compose.foundation.text.BasicText(
+                    text = icon,
+                    style = TextStyle(
+                        color = fg,
+                        fontSize = if (small) 14.sp else 16.sp
+                    )
+                )
+            }
+            androidx.compose.foundation.text.BasicText(
+                text = text,
+                style = TextStyle(
+                    color = fg,
+                    fontSize = if (small) 12.5.sp else 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.3.sp
+                )
             )
-        )
+        }
     }
 }
 

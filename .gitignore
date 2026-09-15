@@ -1,30 +1,33 @@
 ```
 # Gradle
 .gradle/
-!gradle/wrapper/gradle-wrapper.jar
-
-# Dependencies
-node_modules/
-venv/
-.venv/
-__pycache__/
-*.egg-info/
-dist/
 build/
 target/
 
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-*.swo
+# Local configuration file (sdk path, etc)
+local.properties
 
 # Environment
 .env
 .env.local
 *.env.*
 
-# Editors
+# Logs
+*.log
+
+# Temp files
+*.tmp
+*.swp
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+
+# IDE
 .vscode/
 .idea/
 
@@ -32,12 +35,7 @@ target/
 .DS_Store
 Thumbs.db
 
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# Compressed files
+# Archives
 *.zip
 *.gz
 *.tar
