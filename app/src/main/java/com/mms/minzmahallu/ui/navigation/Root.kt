@@ -212,62 +212,122 @@ private fun AppShell(
                 c.em.copy(0.04f)
             ))
         )) {
-            // Top bar
+            // Modern Top Bar with Glass Effect
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(60.dp)
-                    .background(c.panel)
-                    .border(1.dp, c.line)
-                    .padding(horizontal = 12.dp),
+                    .height(72.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                c.panel.copy(alpha = 0.95f),
+                                c.panel.copy(alpha = 0.92f)
+                            )
+                        )
+                    )
+                    .shadow(8.dp, ambientColor = c.shadowMd, spotColor = c.shadowMd)
+                    .border(1.dp, c.line.copy(alpha = 0.3f))
+                    .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Menu Button
                 MmsIconButton(onClick = onToggleDrawer) {
-                    androidx.compose.foundation.text.BasicText("☰", style = TextStyle(color = c.mut, fontSize = 20.sp))
+                    Box(
+                        Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(c.panel2)
+                            .border(1.dp, c.line, RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.foundation.text.BasicText("⋮", style = TextStyle(color = c.tx, fontSize = 22.sp, fontWeight = FontWeight.Bold))
+                    }
                 }
-                Spacer(Modifier.width(8.dp))
-                Box(Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(c.em), contentAlignment = Alignment.Center) {
-                    androidx.compose.foundation.text.BasicText("M", style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp))
+                Spacer(Modifier.width(14.dp))
+                
+                // App Logo with Gradient
+                Box(
+                    Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Brush.linearGradient(listOf(c.emLight, c.em)))
+                        .shadow(4.dp, RoundedCornerShape(14.dp), ambientColor = c.glowEmerald),
+                    contentAlignment = Alignment.Center
+                ) {
+                    androidx.compose.foundation.text.BasicText("M", style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp))
                 }
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(14.dp))
+                
+                // Title Section
                 Column(Modifier.weight(1f)) {
-                    androidx.compose.foundation.text.BasicText(I18n.t(dest.titleKey), style = MmsType.headline.copy(color = c.tx, fontSize = 16.sp))
-                    androidx.compose.foundation.text.BasicText(I18n.t("app_name"), style = MmsType.caption.copy(color = c.fnt, fontSize = 9.sp, letterSpacing = 0.8.sp))
+                    androidx.compose.foundation.text.BasicText(
+                        I18n.t(dest.titleKey),
+                        style = MmsType.title.copy(color = c.tx, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    )
+                    androidx.compose.foundation.text.BasicText(
+                        I18n.t("app_name"),
+                        style = MmsType.caption.copy(color = c.mut, fontSize = 10.sp, letterSpacing = 1.sp)
+                    )
                 }
-                // lang toggle
+                
+                // Language Toggle - Pill Design
                 Row(
                     Modifier
                         .clip(RoundedCornerShape(99.dp))
                         .background(c.panel2)
-                        .border(1.5.dp, c.line, RoundedCornerShape(99.dp))
-                        .padding(3.dp)
+                        .border(1.dp, c.line, RoundedCornerShape(99.dp))
+                        .padding(4.dp)
                 ) {
                     listOf("en" to "EN", "ml" to "മല").forEach { (code, label) ->
                         val on = lang == code
                         Box(
                             Modifier
                                 .clip(RoundedCornerShape(99.dp))
-                                .background(if (on) c.em else Color.Transparent)
+                                .background(if (on) Brush.horizontalGradient(listOf(c.emLight, c.em)) else Color.Transparent)
                                 .mmsClickable { if (!on) onToggleLang() }
-                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            androidx.compose.foundation.text.BasicText(label, style = TextStyle(color = if (on) Color.White else c.mut, fontSize = 11.sp, fontWeight = FontWeight.Medium))
+                            androidx.compose.foundation.text.BasicText(
+                                label,
+                                style = TextStyle(
+                                    color = if (on) Color.White else c.mut,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium
+                                )
+                            )
                         }
                     }
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(10.dp))
+                
+                // Theme Toggle
                 MmsIconButton(onClick = onToggleTheme) {
-                    androidx.compose.foundation.text.BasicText(if (c.isDark) "☀" else "☾", style = TextStyle(fontSize = 16.sp, color = c.mut))
+                    Box(
+                        Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(c.panel2)
+                            .border(1.dp, c.line, RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.foundation.text.BasicText(if (c.isDark) "☀" else "☾", style = TextStyle(fontSize = 18.sp, color = c.tx))
+                    }
                 }
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(10.dp))
+                
+                // User Avatar with Gradient Ring
                 Box(
                     Modifier
-                        .size(32.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(c.em, c.emdd))),
+                        .background(Brush.linearGradient(listOf(c.skyLight, c.sky)))
+                        .border(2.dp, c.panel, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    androidx.compose.foundation.text.BasicText(user.initials, style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold))
+                    androidx.compose.foundation.text.BasicText(
+                        user.initials,
+                        style = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    )
                 }
             }
 
@@ -338,86 +398,159 @@ private fun SideDrawer(
     val c = C()
     val lang by I18n.lang.collectAsState()
     val sectionMl = mapOf("Management" to "മാനേജ്മെന്റ്", "Finance" to "സാമ്പത്തികം", "Registers" to "രജിസ്റ്ററുകൾ", "System" to "സിസ്റ്റം")
+    
+    // Modern Drawer with Gradient Header
     Column(
         modifier
-            .shadow(20.dp, RoundedCornerShape(18.dp))
-            .clip(RoundedCornerShape(18.dp))
-            .background(c.panel)
-            .border(1.dp, c.line, RoundedCornerShape(18.dp))
+            .shadow(24.dp, RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(c.panel.copy(alpha = 0.98f), c.panel)
+                )
+            )
+            .border(1.5.dp, c.line.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
     ) {
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 10.dp)) {
+        // User Profile Header
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(c.em.copy(alpha = 0.12f), Color.Transparent)
+                    )
+                )
+                .padding(20.dp)
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(Brush.linearGradient(listOf(c.skyLight, c.sky)))
+                        .border(3.dp, c.panel, CircleShape)
+                        .shadow(8.dp, CircleShape, ambientColor = c.glowSky),
+                    contentAlignment = Alignment.Center
+                ) {
+                    androidx.compose.foundation.text.BasicText(
+                        user.initials,
+                        style = TextStyle(color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                androidx.compose.foundation.text.BasicText(
+                    user.fullName,
+                    style = MmsType.title.copy(color = c.tx, fontWeight = FontWeight.SemiBold)
+                )
+                Spacer(Modifier.height(4.dp))
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(c.panel2)
+                        .border(1.dp, c.line, RoundedCornerShape(99.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    androidx.compose.foundation.text.BasicText(
+                        user.role,
+                        style = MmsType.caption.copy(color = c.mut, fontWeight = FontWeight.Medium)
+                    )
+                }
+            }
+        }
+        
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.line.copy(alpha = 0.5f)))
+        
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 12.dp)) {
             var lastSec: String? = null
             Dest.all.forEach { d ->
                 val sec = d.section
                 if (sec != null && sec != lastSec) {
                     lastSec = sec
                     val label = if (lang == "ml") sectionMl[sec] ?: sec else sec
-                    Row(Modifier.padding(top = 14.dp, bottom = 6.dp, start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.padding(top = 16.dp, bottom = 8.dp, start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.width(3.dp).height(14.dp).clip(RoundedCornerShape(2.dp)).background(c.em))
+                        Spacer(Modifier.width(8.dp))
                         androidx.compose.foundation.text.BasicText(
                             label.uppercase(),
-                            style = MmsType.overline.copy(color = c.fnt, fontSize = 9.5.sp, letterSpacing = 1.6.sp)
+                            style = MmsType.overline.copy(color = c.tx, fontSize = 10.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.SemiBold)
                         )
                         Spacer(Modifier.width(8.dp))
-                        Box(Modifier.weight(1f).height(1.dp).background(c.line))
+                        Box(Modifier.weight(1f).height(1.dp).background(c.line.copy(alpha = 0.5f)))
                     }
                 }
                 val on = dest == d
                 val tint = Tints.of(d.tint, c.isDark)
+                
+                // Modern Nav Item with Gradient Active State
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 2.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .padding(vertical = 3.dp)
+                        .clip(RoundedCornerShape(14.dp))
                         .background(
-                            if (on) Brush.horizontalGradient(listOf(tint.sc.copy(0.14f), tint.sc.copy(0.05f)))
-                            else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
+                            if (on) Brush.horizontalGradient(listOf(tint.sb, tint.sb.copy(alpha = 0.5f)))
+                            else Color.Transparent
                         )
-                        .then(if (on) Modifier.border(1.5.dp, tint.sl, RoundedCornerShape(12.dp)) else Modifier)
+                        .then(if (on) Modifier.border(1.5.dp, tint.sl.copy(alpha = 0.6f), RoundedCornerShape(14.dp)) else Modifier)
                         .mmsClickable { onDest(d) }
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                        .padding(horizontal = 12.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
                         Modifier
-                            .size(30.dp)
-                            .clip(RoundedCornerShape(9.dp))
-                            .background(if (on) tint.sc else tint.sc.copy(0.10f)),
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(11.dp))
+                            .background(
+                                if (on) Brush.linearGradient(listOf(tint.sc, tint.sc.copy(alpha = 0.8f)))
+                                else tint.sb
+                            )
+                            .then(if (on) Modifier.shadow(4.dp, RoundedCornerShape(11.dp), ambientColor = tint.sc.copy(0.3f)) else Modifier),
                         contentAlignment = Alignment.Center
                     ) {
                         androidx.compose.foundation.text.BasicText(
                             d.route.take(1).uppercase(),
-                            style = TextStyle(color = if (on) Color.White else tint.sc, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            style = TextStyle(
+                                color = if (on) Color.White else tint.sc,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         )
                     }
-                    Spacer(Modifier.width(11.dp))
+                    Spacer(Modifier.width(13.dp))
                     androidx.compose.foundation.text.BasicText(
                         I18n.t(d.titleKey),
-                        style = MmsType.bodySm.copy(
+                        style = MmsType.body.copy(
                             color = if (on) tint.st else c.mut,
                             fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
-                            fontSize = 13.5.sp
+                            fontSize = 14.sp
                         ),
                         modifier = Modifier.weight(1f)
                     )
-                    if (on) Box(Modifier.size(5.dp).clip(CircleShape).background(tint.sc))
+                    if (on) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Brush.linearGradient(listOf(tint.sc, Color.White)))
+                        )
+                    }
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(c.line))
-        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(38.dp).clip(CircleShape).background(Brush.linearGradient(listOf(c.em, c.emdd))),
-                contentAlignment = Alignment.Center
-            ) {
-                androidx.compose.foundation.text.BasicText(user.initials, style = TextStyle(color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                androidx.compose.foundation.text.BasicText(user.fullName, style = MmsType.bodySm.copy(color = c.tx, fontWeight = FontWeight.SemiBold))
-                androidx.compose.foundation.text.BasicText(user.role, style = MmsType.caption.copy(color = c.fnt))
-            }
-            MmsIconButton(onClick = onLogout) {
-                androidx.compose.foundation.text.BasicText("⎋", style = TextStyle(color = c.cRose, fontSize = 16.sp))
+        
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.line.copy(alpha = 0.5f)))
+        
+        // Logout Section
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            MmsButton(
+                "Logout",
+                onLogout,
+                modifier = Modifier.weight(1f),
+                small = true,
+                danger = true,
+                icon = "⎋"
+            )
+        }
             }
         }
     }

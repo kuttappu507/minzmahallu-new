@@ -4,121 +4,295 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
-/** Custom design tokens — NO Material Design colors. Mirrors Electron globals.css. */
+/** Modern Fluidic Design System - Premium UI Colors with Gradients & Shadows */
+
+// Primary Brand Palette with Gradient Variants
+val Emerald = Color(0xFF10B981)
+val EmeraldLight = Color(0xFF34D399)
+val EmeraldDark = Color(0xFF059669)
+val EmeraldDarker = Color(0xFF047857)
+
+val Sky = Color(0xFF0EA5E9)
+val SkyLight = Color(0xFF38BDF8)
+val SkyDark = Color(0xFF0284C7)
+
+val Rose = Color(0xFFF43F5E)
+val RoseLight = Color(0xFFFB7185)
+val RoseDark = Color(0xFFE11D48)
+
+val Amber = Color(0xFFF59E0B)
+val AmberLight = Color(0xFFFBBF24)
+val AmberDark = Color(0xFFD97706)
+
+val Violet = Color(0xFF8B5CF6)
+val VioletLight = Color(0xFFA78BFA)
+val VioletDark = Color(0xFF7C3AED)
+
+val Teal = Color(0xFF14B8A6)
+val TealLight = Color(0xFF2DD4BF)
+val TealDark = Color(0xFF0D9488)
+
+val Indigo = Color(0xFF6366F1)
+val IndigoLight = Color(0xFF818CF8)
+val IndigoDark = Color(0xFF4F46E5)
+
+val Cyan = Color(0xFF06B6D4)
+val CyanLight = Color(0xFF22D3EE)
+val CyanDark = Color(0xFF0891B2)
+
+// Modern Light Theme - Clean & Airy
+val LightBg = Color(0xFFF8FAFC)
+val LightBgGradient = Color(0xFFF1F5F9)
+val LightPanel = Color(0xFFFFFFFF)
+val LightPanel2 = Color(0xFFF8FAFC)
+val LightPanel3 = Color(0xFFF1F5F9)
+val LightHead = Color(0xFFFAFBFD)
+val LightLine = Color(0xFFE2E8F0)
+val LightLine2 = Color(0xFFCBD5E1)
+val LightTx = Color(0xFF0F172A)
+val LightTxSec = Color(0xFF1E293B)
+val LightMut = Color(0xFF64748B)
+val LightFnt = Color(0xFF94A3B8)
+
+// Modern Dark Theme - Deep & Premium
+val DarkBg = Color(0xFF0B1221)
+val DarkBgGradient = Color(0xFF0F172A)
+val DarkPanel = Color(0xFF1E293B)
+val DarkPanel2 = Color(0xFF1E293B)
+val DarkPanel3 = Color(0xFF2D3748)
+val DarkHead = Color(0xFF1A2332)
+val DarkLine = Color(0xFF2D3748)
+val DarkLine2 = Color(0xFF3D4C5F)
+val DarkTx = Color(0xFFF1F5F9)
+val DarkTxSec = Color(0xFFE2E8F0)
+val DarkMut = Color(0xFF94A3B8)
+val DarkFnt = Color(0xFF64748B)
+
+// Elevation & Glow Effects
+val ShadowSm = Color(0x0A000000)
+val ShadowMd = Color(0x14000000)
+val ShadowLg = Color(0x1F000000)
+val GlowEmerald = Color(0x4010B981)
+val GlowSky = Color(0x400EA5E9)
+val GlowRose = Color(0x40F43F5E)
+val GlowAmber = Color(0x40F59E0B)
+
+/** Custom design tokens — Modern fluidic design with gradients and elevations. */
 @Immutable
 data class MmsColors(
     val bg: Color,
     val bodyBg: Color,
+    val bodyBgGradient: Color,
     val panel: Color,
     val panel2: Color,
+    val panel3: Color,
     val head: Color,
     val line: Color,
     val line2: Color,
     val tx: Color,
+    val txSec: Color,
     val mut: Color,
     val fnt: Color,
     val em: Color,
+    val emLight: Color,
     val emd: Color,
     val emdd: Color,
-    val selBg: Color,
-    val roseBg: Color,
-    val roseLine: Color,
+    val sky: Color,
+    val skyLight: Color,
+    val skyd: Color,
+    val rose: Color,
+    val roseLight: Color,
+    val rosd: Color,
+    val amber: Color,
+    val amberLight: Color,
+    val ambd: Color,
+    val violet: Color,
+    val violetLight: Color,
+    val vold: Color,
+    val teal: Color,
+    val tealLight: Color,
+    val tead: Color,
+    val indigo: Color,
+    val indigoLight: Color,
+    val indigoDark: Color,
+    val cyan: Color,
+    val cyanLight: Color,
+    val cyand: Color,
     val cEm: Color,
     val cGold: Color,
     val goldDeep: Color,
     val cSky: Color,
     val cRose: Color,
+    val cIndigo: Color,
+    val selBg: Color,
+    val roseBg: Color,
+    val roseLine: Color,
+    val shadowSm: Color,
+    val shadowMd: Color,
+    val shadowLg: Color,
+    val glowEmerald: Color,
+    val glowSky: Color,
+    val glowRose: Color,
+    val glowAmber: Color,
     val isDark: Boolean,
 )
 
 val LightColors = MmsColors(
-    bg = Color(0xFFF6F8FA),
-    bodyBg = Color(0xFFF0F3F6),
-    panel = Color(0xFFFFFFFF),
-    panel2 = Color(0xFFF8FAFC),
-    head = Color(0xFFFAFBFD),
-    line = Color(0xFFE7ECF1),
-    line2 = Color(0xFFD4DCE4),
-    tx = Color(0xFF182230),
-    mut = Color(0xFF55657A),
-    fnt = Color(0xFF93A1B3),
-    em = Color(0xFF0D9488),
-    emd = Color(0xFF0B7E74),
-    emdd = Color(0xFF0A6B63),
-    selBg = Color(0xFFE7F6F3),
-    roseBg = Color(0xFFFDEEF0),
-    roseLine = Color(0xFFF5C6CC),
-    cEm = Color(0xFF0D9488),
-    cGold = Color(0xFFD9930A),
-    goldDeep = Color(0xFF9A6B00),
-    cSky = Color(0xFF2563EB),
-    cRose = Color(0xFFE11D48),
+    bg = LightBg,
+    bodyBg = LightBg,
+    bodyBgGradient = LightBgGradient,
+    panel = LightPanel,
+    panel2 = LightPanel2,
+    panel3 = LightPanel3,
+    head = LightHead,
+    line = LightLine,
+    line2 = LightLine2,
+    tx = LightTx,
+    txSec = LightTxSec,
+    mut = LightMut,
+    fnt = LightFnt,
+    em = Emerald,
+    emLight = EmeraldLight,
+    emd = EmeraldDark,
+    emdd = EmeraldDarker,
+    sky = Sky,
+    skyLight = SkyLight,
+    skyd = SkyDark,
+    rose = Rose,
+    roseLight = RoseLight,
+    rosd = RoseDark,
+    amber = Amber,
+    amberLight = AmberLight,
+    ambd = AmberDark,
+    violet = Violet,
+    violetLight = VioletLight,
+    vold = VioletDark,
+    teal = Teal,
+    tealLight = TealLight,
+    tead = TealDark,
+    indigo = Indigo,
+    indigoLight = IndigoLight,
+    indigoDark = IndigoDark,
+    cyan = Cyan,
+    cyanLight = CyanLight,
+    cyand = CyanDark,
+    cEm = Emerald,
+    cGold = Amber,
+    goldDeep = AmberDark,
+    cSky = Sky,
+    cRose = Rose,
+    cIndigo = Indigo,
+    selBg = Emerald.copy(0.08f),
+    roseBg = Rose.copy(0.08f),
+    roseLine = Rose.copy(0.3f),
+    shadowSm = ShadowSm,
+    shadowMd = ShadowMd,
+    shadowLg = ShadowLg,
+    glowEmerald = GlowEmerald,
+    glowSky = GlowSky,
+    glowRose = GlowRose,
+    glowAmber = GlowAmber,
     isDark = false,
 )
 
 val LightColorsFixed = LightColors
 
 val DarkColors = MmsColors(
-    bg = Color(0xFF0E131A),
-    bodyBg = Color(0xFF0A0E14),
-    panel = Color(0xFF151C25),
-    panel2 = Color(0xFF10161E),
-    head = Color(0xFF182130),
-    line = Color(0xFF223040),
-    line2 = Color(0xFF2F4052),
-    tx = Color(0xFFE8EEF5),
-    mut = Color(0xFFA9B8C9),
-    fnt = Color(0xFF77889C),
-    em = Color(0xFF2DD4BF),
-    emd = Color(0xFF1FB3A1),
-    emdd = Color(0xFF178C7E),
-    selBg = Color(0xFF10342F),
-    roseBg = Color(0xFF33121C),
-    roseLine = Color(0xFF6A2133),
-    cEm = Color(0xFF2DD4BF),
-    cGold = Color(0xFFF2B83D),
-    goldDeep = Color(0xFFE0AA3E),
-    cSky = Color(0xFF6EA8FF),
-    cRose = Color(0xFFFB7185),
+    bg = DarkBg,
+    bodyBg = DarkBg,
+    bodyBgGradient = DarkBgGradient,
+    panel = DarkPanel,
+    panel2 = DarkPanel2,
+    panel3 = DarkPanel3,
+    head = DarkHead,
+    line = DarkLine,
+    line2 = DarkLine2,
+    tx = DarkTx,
+    txSec = DarkTxSec,
+    mut = DarkMut,
+    fnt = DarkFnt,
+    em = Emerald,
+    emLight = EmeraldLight,
+    emd = EmeraldDark,
+    emdd = EmeraldDarker,
+    sky = Sky,
+    skyLight = SkyLight,
+    skyd = SkyDark,
+    rose = Rose,
+    roseLight = RoseLight,
+    rosd = RoseDark,
+    amber = Amber,
+    amberLight = AmberLight,
+    ambd = AmberDark,
+    violet = Violet,
+    violetLight = VioletLight,
+    vold = VioletDark,
+    teal = Teal,
+    tealLight = TealLight,
+    tead = TealDark,
+    indigo = Indigo,
+    indigoLight = IndigoLight,
+    indigoDark = IndigoDark,
+    cyan = Cyan,
+    cyanLight = CyanLight,
+    cyand = CyanDark,
+    cEm = Emerald,
+    cGold = Amber,
+    goldDeep = AmberDark,
+    cSky = Sky,
+    cRose = Rose,
+    cIndigo = Indigo,
+    selBg = Emerald.copy(0.12f),
+    roseBg = Rose.copy(0.12f),
+    roseLine = Rose.copy(0.3f),
+    shadowSm = ShadowSm,
+    shadowMd = ShadowMd,
+    shadowLg = ShadowLg,
+    glowEmerald = GlowEmerald,
+    glowSky = GlowSky,
+    glowRose = GlowRose,
+    glowAmber = GlowAmber,
     isDark = true,
 )
 
 @Immutable
 data class ModuleTint(
-    val sc: Color,
-    val sb: Color,
-    val st: Color,
-    val sl: Color,
+    val sc: Color,      // Primary color
+    val sb: Color,      // Background tint
+    val st: Color,      // Text color
+    val sl: Color,      // Border/Line color
 )
 
 object Tints {
     fun light(id: String): ModuleTint = when (id) {
-        "em" -> ModuleTint(Color(0xFF0D9488), Color(0xFFE6F6F3), Color(0xFF0B6E64), Color(0xFFBDEAE3))
-        "teal" -> ModuleTint(Color(0xFF14A89B), Color(0xFFDEF5F2), Color(0xFF0B6E64), Color(0xFFB5E6DF))
-        "sky" -> ModuleTint(Color(0xFF2563EB), Color(0xFFE7EFFE), Color(0xFF1D4ED8), Color(0xFFC4D8FB))
-        "cyan" -> ModuleTint(Color(0xFF0AA2C0), Color(0xFFE0F5FA), Color(0xFF0B6F86), Color(0xFFB5E6F2))
-        "blue" -> ModuleTint(Color(0xFF4C7CE8), Color(0xFFE8EEFD), Color(0xFF2B4FAE), Color(0xFFC0D0F8))
-        "vio" -> ModuleTint(Color(0xFF8262E8), Color(0xFFEDE8FD), Color(0xFF5C3FC0), Color(0xFFD0C4F8))
-        "pink" -> ModuleTint(Color(0xFFE5609A), Color(0xFFFDE7F0), Color(0xFFB0356A), Color(0xFFF6C4DB))
-        "rose" -> ModuleTint(Color(0xFFE11D48), Color(0xFFFDEEF1), Color(0xFFB31136), Color(0xFFF5C6CD))
-        "orange" -> ModuleTint(Color(0xFFEA6F2D), Color(0xFFFDEEE3), Color(0xFFB04F15), Color(0xFFF8D3B6))
-        "gold" -> ModuleTint(Color(0xFFD9930A), Color(0xFFFDF5DD), Color(0xFF96640A), Color(0xFFF2E2A8))
-        "slate" -> ModuleTint(Color(0xFF66788F), Color(0xFFEAEEF3), Color(0xFF46586E), Color(0xFFCDD6E0))
-        else -> ModuleTint(Color(0xFF0D9488), Color(0xFFE6F6F3), Color(0xFF0B6E64), Color(0xFFBDEAE3))
+        "em" -> ModuleTint(Emerald, Emerald.copy(0.08f), EmeraldDark, Emerald.copy(0.3f))
+        "teal" -> ModuleTint(Teal, Teal.copy(0.08f), TealDark, Teal.copy(0.3f))
+        "sky" -> ModuleTint(Sky, Sky.copy(0.08f), SkyDark, Sky.copy(0.3f))
+        "cyan" -> ModuleTint(Cyan, Cyan.copy(0.08f), CyanDark, Cyan.copy(0.3f))
+        "blue" -> ModuleTint(Indigo, Indigo.copy(0.08f), IndigoDark, Indigo.copy(0.3f))
+        "vio" -> ModuleTint(Violet, Violet.copy(0.08f), VioletDark, Violet.copy(0.3f))
+        "pink" -> ModuleTint(RoseLight, RoseLight.copy(0.08f), RoseDark, RoseLight.copy(0.3f))
+        "rose" -> ModuleTint(Rose, Rose.copy(0.08f), RoseDark, Rose.copy(0.3f))
+        "orange" -> ModuleTint(AmberLight, AmberLight.copy(0.08f), AmberDark, AmberLight.copy(0.3f))
+        "gold" -> ModuleTint(Amber, Amber.copy(0.08f), AmberDark, Amber.copy(0.3f))
+        "indigo" -> ModuleTint(Indigo, Indigo.copy(0.08f), IndigoDark, Indigo.copy(0.3f))
+        "slate" -> ModuleTint(Color(0xFF66788F), Color(0xFF66788F).copy(0.08f), Color(0xFF46586E), Color(0xFF66788F).copy(0.3f))
+        else -> ModuleTint(Emerald, Emerald.copy(0.08f), EmeraldDark, Emerald.copy(0.3f))
     }
     fun dark(id: String): ModuleTint = when (id) {
-        "em" -> ModuleTint(Color(0xFF2DD4BF), Color(0xFF0F2F2A), Color(0xFF7CE8DA), Color(0xFF1D4D44))
-        "teal" -> ModuleTint(Color(0xFF35C4B4), Color(0xFF0D2B28), Color(0xFF7BE8DB), Color(0xFF1A4A44))
-        "sky" -> ModuleTint(Color(0xFF6EA8FF), Color(0xFF131F38), Color(0xFFA9C6FF), Color(0xFF2A4070))
-        "cyan" -> ModuleTint(Color(0xFF38C3DD), Color(0xFF0C2831), Color(0xFF85E2F4), Color(0xFF144A59))
-        "blue" -> ModuleTint(Color(0xFF7EA3F5), Color(0xFF152240), Color(0xFFA9C1FB), Color(0xFF274070))
-        "vio" -> ModuleTint(Color(0xFFA48AF2), Color(0xFF221A41), Color(0xFFC8B8FB), Color(0xFF3B2F6E))
-        "pink" -> ModuleTint(Color(0xFFEF87B4), Color(0xFF361226), Color(0xFFF6A9CB), Color(0xFF5C2340))
-        "rose" -> ModuleTint(Color(0xFFFB7185), Color(0xFF381220), Color(0xFFFDA4AF), Color(0xFF632438))
-        "orange" -> ModuleTint(Color(0xFFF59D5E), Color(0xFF331C0C), Color(0xFFF9BD90), Color(0xFF5C3616))
-        "gold" -> ModuleTint(Color(0xFFF2C14E), Color(0xFF322609), Color(0xFFF7D98D), Color(0xFF5C4716))
-        "slate" -> ModuleTint(Color(0xFF93A7C4), Color(0xFF1A2230), Color(0xFFC0CDE2), Color(0xFF31405A))
-        else -> ModuleTint(Color(0xFF2DD4BF), Color(0xFF0F2F2A), Color(0xFF7CE8DA), Color(0xFF1D4D44))
+        "em" -> ModuleTint(EmeraldLight, Emerald.copy(0.15f), EmeraldLight, Emerald.copy(0.4f))
+        "teal" -> ModuleTint(TealLight, Teal.copy(0.15f), TealLight, Teal.copy(0.4f))
+        "sky" -> ModuleTint(SkyLight, Sky.copy(0.15f), SkyLight, Sky.copy(0.4f))
+        "cyan" -> ModuleTint(CyanLight, Cyan.copy(0.15f), CyanLight, Cyan.copy(0.4f))
+        "blue" -> ModuleTint(IndigoLight, Indigo.copy(0.15f), IndigoLight, Indigo.copy(0.4f))
+        "vio" -> ModuleTint(VioletLight, Violet.copy(0.15f), VioletLight, Violet.copy(0.4f))
+        "pink" -> ModuleTint(RoseLight, Rose.copy(0.15f), RoseLight, Rose.copy(0.4f))
+        "rose" -> ModuleTint(RoseLight, Rose.copy(0.15f), RoseLight, Rose.copy(0.4f))
+        "orange" -> ModuleTint(AmberLight, Amber.copy(0.15f), AmberLight, Amber.copy(0.4f))
+        "gold" -> ModuleTint(AmberLight, Amber.copy(0.15f), AmberLight, Amber.copy(0.4f))
+        "indigo" -> ModuleTint(IndigoLight, Indigo.copy(0.15f), IndigoLight, Indigo.copy(0.4f))
+        "slate" -> ModuleTint(Color(0xFF93A7C4), Color(0xFF93A7C4).copy(0.15f), Color(0xFFC0CDE2), Color(0xFF93A7C4).copy(0.4f))
+        else -> ModuleTint(EmeraldLight, Emerald.copy(0.15f), EmeraldLight, Emerald.copy(0.4f))
     }
     fun of(id: String, isDark: Boolean) = if (isDark) dark(id) else light(id)
 }
