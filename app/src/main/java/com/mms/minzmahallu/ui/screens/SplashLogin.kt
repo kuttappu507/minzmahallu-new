@@ -91,6 +91,8 @@ fun LoginScreen(
     onSetup: (String, String, String) -> Unit,
 ) {
     val c = C()
+    val ctx = LocalContext.current
+    val lang by I18n.lang.collectAsState()
     var username by remember { mutableStateOf("") }
     var fullName by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -106,6 +108,36 @@ fun LoginScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // language toggle
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(c.panel)
+                    .border(1.dp, c.line, RoundedCornerShape(99.dp))
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf("en" to "English", "ml" to "മലയാളം").forEach { (code, label) ->
+                    val on = lang == code
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(if (on) Brush.horizontalGradient(listOf(c.emLight, c.em)) else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent)))
+                            .mmsClickable { if (!on) I18n.setLang(ctx, code) }
+                            .padding(horizontal = 18.dp, vertical = 8.dp)
+                    ) {
+                        androidx.compose.foundation.text.BasicText(
+                            label,
+                            style = TextStyle(
+                                color = if (on) Color.White else c.mut,
+                                fontSize = 12.sp,
+                                fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium
+                            )
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(18.dp))
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -167,6 +199,12 @@ fun LoginScreen(
                         "Min 8 chars with upper, lower, digit & special character.",
                         style = MmsType.caption.copy(color = c.fnt)
                     )
+                    if (confirm.isNotEmpty() && password != confirm) {
+                        androidx.compose.foundation.text.BasicText(
+                            "Passwords do not match.",
+                            style = MmsType.caption.copy(color = c.cRose, fontWeight = FontWeight.SemiBold)
+                        )
+                    }
                 }
                 Spacer(Modifier.height(4.dp))
                 MmsButton(

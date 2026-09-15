@@ -207,10 +207,12 @@ fun MmsInput(
     password: Boolean = false,
     enabled: Boolean = true,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    maxLines: Int = if (singleLine) 1 else 8,
 ) {
     val c = C()
     var focused by remember { mutableStateOf(false) }
-    Column(modifier = modifier) {
+    var revealed by remember { mutableStateOf(false) }
+    Column(modifier = modifier.alpha(if (enabled) 1f else 0.55f)) {
         if (label != null) {
             androidx.compose.foundation.text.BasicText(
                 text = label.uppercase(),
@@ -218,7 +220,7 @@ fun MmsInput(
                 modifier = Modifier.padding(bottom = 7.dp)
             )
         }
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 42.dp)
@@ -230,30 +232,43 @@ fun MmsInput(
                     RoundedCornerShape(10.dp)
                 )
                 .padding(horizontal = 13.dp, vertical = 10.dp),
-            contentAlignment = Alignment.CenterStart
+            verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top
         ) {
-            if (value.isEmpty() && placeholder.isNotEmpty()) {
-                androidx.compose.foundation.text.BasicText(
-                    text = placeholder,
-                    style = MmsType.body.copy(color = c.fnt, fontSize = 15.sp)
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty() && placeholder.isNotEmpty()) {
+                    androidx.compose.foundation.text.BasicText(
+                        text = placeholder,
+                        style = MmsType.body.copy(color = c.fnt, fontSize = 15.sp)
+                    )
+                }
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    singleLine = singleLine,
+                    enabled = enabled,
+                    maxLines = maxLines,
+                    textStyle = MmsType.body.copy(color = c.tx, fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                    cursorBrush = SolidColor(c.em),
+                    visualTransformation = if (password && !revealed) PasswordVisualTransformation() else VisualTransformation.None,
+                    keyboardOptions = keyboardOptions,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { focused = it.isFocused }
                 )
             }
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                singleLine = singleLine,
-                enabled = enabled,
-                textStyle = MmsType.body.copy(color = c.tx, fontSize = 15.sp, fontWeight = FontWeight.Medium),
-                cursorBrush = SolidColor(c.em),
-                visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
-                keyboardOptions = keyboardOptions,
-                modifier = Modifier.fillMaxWidth(),
-                onTextLayout = {},
-                decorationBox = { inner ->
-                    // track focus roughly via composition
-                    inner()
+            if (password) {
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    Modifier
+                        .mmsClickable(enabled = enabled) { revealed = !revealed }
+                        .padding(2.dp)
+                ) {
+                    androidx.compose.foundation.text.BasicText(
+                        if (revealed) "HIDE" else "SHOW",
+                        style = MmsType.label.copy(color = c.em, fontSize = 10.sp)
+                    )
                 }
-            )
+            }
         }
     }
 }
@@ -265,9 +280,12 @@ fun MmsSelect(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     label: String? = null,
+    placeholder: String = "—",
 ) {
     val c = C()
     var open by remember { mutableStateOf(false) }
+    // Long lists open a searchable picker dialog instead of an inline dropdown.
+    val useDialog = options.size > 7
     Column(modifier = modifier) {
         if (label != null) {
             androidx.compose.foundation.text.BasicText(
@@ -288,8 +306,11 @@ fun MmsSelect(
             contentAlignment = Alignment.CenterStart
         ) {
             androidx.compose.foundation.text.BasicText(
-                text = value.ifBlank { "—" },
-                style = MmsType.body.copy(color = c.tx, fontSize = 15.sp)
+                text = value.ifBlank { placeholder },
+                style = MmsType.body.copy(
+                    color = if (value.isBlank()) c.fnt else c.tx,
+                    fontSize = 15.sp
+                )
             )
             androidx.compose.foundation.text.BasicText(
                 text = "▾",
@@ -297,25 +318,47 @@ fun MmsSelect(
                 modifier = Modifier.align(Alignment.CenterEnd)
             )
         }
-        AnimatedVisibility(open) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp)
-                    .shadow(12.dp, RoundedCornerShape(12.dp))
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(c.panel)
-                    .border(1.dp, c.line, RoundedCornerShape(12.dp))
-            ) {
-                options.forEach { opt ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .mmsClickable { onSelect(opt); open = false }
-                            .background(if (opt == value) c.selBg else Color.Transparent)
-                            .padding(12.dp)
-                    ) {
-                        androidx.compose.foundation.text.BasicText(opt, style = MmsType.body.copy(color = c.tx))
+        if (useDialog) {
+            if (open) {
+                MmsPickerDialog(
+                    title = label ?: "Select",
+                    options = options,
+                    selected = value.ifBlank { null },
+                    onSelect = { onSelect(it); open = false },
+                    onDismiss = { open = false }
+                )
+            }
+        } else {
+            AnimatedVisibility(open) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState())
+                        .shadow(12.dp, RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(c.panel)
+                        .border(1.dp, c.line, RoundedCornerShape(12.dp))
+                ) {
+                    if (options.isEmpty()) {
+                        androidx.compose.foundation.text.BasicText(
+                            "No options",
+                            style = MmsType.body.copy(color = c.fnt),
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    } else {
+                        options.forEach { opt ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .mmsClickable { onSelect(opt); open = false }
+                                    .background(if (opt == value) c.selBg else Color.Transparent)
+                                    .padding(12.dp)
+                            ) {
+                                androidx.compose.foundation.text.BasicText(opt, style = MmsType.body.copy(color = c.tx))
+                            }
+                        }
                     }
                 }
             }

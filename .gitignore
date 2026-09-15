@@ -1,20 +1,25 @@
-```yaml
-name: CI
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python
-      uses: actions/setup-python@v3
-      with:
-        python-version: '3.x'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    - name: Run tests
-      run: |
-        python -m pytest tests/
-```
+# Android / Gradle
+*.iml
+.gradle/
+/local.properties
+local.properties
+.idea/
+.DS_Store
+/build/
+/app/build/
+/app/release/
+*.hprof
+*.keystore
+*.jks
+!gradle/wrapper/gradle-wrapper.jar
+
+# Signing secrets
+keystore.properties
+*.pem
+
+# OS / editor noise
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/

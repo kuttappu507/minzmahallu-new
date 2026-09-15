@@ -345,11 +345,12 @@ class MmsRepository(val db: DatabaseManager) {
         db.run("UPDATE welfare_requests SET status='Rejected',remarks=?,processed_by=?,processed_date=datetime('now'),updated_at=datetime('now') WHERE id=?", arrayOf(reason, actorId(), id))
         auth.audit("REJECT", "welfare", id, reason)
     }
-    fun welfareDisburse(id: Long, reason: String, adminPassword: String) {
+    fun welfareDisburse(id: Long, reason: String, adminPassword: String, minutesDate: String = "") {
         auth.verifyAdminPassword(adminPassword)
         val w = welfareGet(id) ?: error("Welfare request not found")
-        if (Format.str(w, "minutes_date").isBlank()) error("Date of the committee minutes approving this amount is missing.")
-        db.run("UPDATE welfare_requests SET status='Disbursed',disbursed_date=?,processed_by=?,updated_at=datetime('now') WHERE id=?", arrayOf(Format.today(), actorId(), id))
+        val md = minutesDate.ifBlank { Format.str(w, "minutes_date") }
+        if (md.isBlank()) error("Date of the committee minutes approving this amount is missing.")
+        db.run("UPDATE welfare_requests SET status='Disbursed',disbursed_date=?,minutes_date=?,processed_by=?,updated_at=datetime('now') WHERE id=?", arrayOf(Format.today(), md, actorId(), id))
         auth.audit("DISBURSE", "welfare", id, reason.ifBlank { "Disbursed" })
     }
     fun welfareCategories() = listOf("Medical Aid", "Education Aid", "Marriage Assistance", "Financial Assistance")
@@ -542,4 +543,229 @@ class MmsRepository(val db: DatabaseManager) {
         return out
     }
     fun appInfo() = mapOf("name" to "Minz Mahallu Management System", "version" to "2.0.0", "platform" to "Android")
+
+    // ------------------------------------------------------- detail / receipt helpers
+
+    fun certificateGet(id: Long) = db.one("SELECT * FROM certificates WHERE id=?", arrayOf(id.toString()))
+
+    fun userGet(id: Long) = db.one("SELECT id,username,full_name,role,email,phone,is_active,is_locked,last_login_at,must_change_pwd,created_at FROM users WHERE id=?", arrayOf(id.toString()))
+
+    fun subscriptionPayments(subId: Long): List<Map<String, Any?>> {
+        return try {
+            db.all("SELECT * FROM subscription_payments WHERE subscription_id=? ORDER BY payment_date DESC, id DESC", arrayOf(subId.toString()))
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun familyDetail(id: Long): Map<String, Any?> {
+        val fam = familyGet(id) ?: error("Family not found")
+        val members = db.all("SELECT * FROM members WHERE family_id=? ORDER BY is_head DESC, name ASC", arrayOf(id.toString()))
+        val sub = db.one("SELECT s.*, p.name AS plan_name FROM subscriptions s LEFT JOIN subscription_plans p ON p.id=s.plan_id WHERE s.family_id=? LIMIT 1", arrayOf(id.toString()))
+        return mapOf("family" to fam, "members" to members, "subscription" to (sub ?: emptyMap<String, Any?>()))
+    }
+
+    fun memberFull(id: Long): Map<String, Any?>? =
+        db.one("SELECT m.*, f.family_number, f.house_name, f.ward, f.area, f.phone AS family_phone FROM members m LEFT JOIN families f ON f.id=m.family_id WHERE m.id=?", arrayOf(id.toString()))
+
+    fun auditModules(): List<String> =
+        db.all("SELECT DISTINCT module AS m FROM audit_log WHERE module IS NOT NULL AND module != '' ORDER BY module").map { Format.str(it, "m") }
+
+    fun voidedTransactions(): List<Map<String, Any?>> =
+        db.all("SELECT t.*, u.username AS voided_by_name, u2.username AS created_by_name FROM transactions t LEFT JOIN users u ON u.id=t.voided_by LEFT JOIN users u2 ON u2.id=t.created_by WHERE t.status='Void' ORDER BY t.voided_at DESC, t.id DESC")
+
+    // ------------------------------------------------------- WhatsApp / receipts
+
+    fun familiesWithPhones(search: String? = null, limit: Int = 200): List<Map<String, Any?>> {
+        val where = mutableListOf("f.status='Active'", "(COALESCE(f.phone,'') != '' OR COALESCE(f.whatsapp_phone,'') != '')")
+        val params = mutableListOf<String>()
+        if (!search.isNullOrBlank()) {
+            where += "(f.family_number LIKE ? OR f.house_name LIKE ? OR f.phone LIKE ? OR f.whatsapp_phone LIKE ?)"
+            val t = like(search); repeat(4) { params += t }
+        }
+        params += limit.toString()
+        return db.all(
+            "SELECT f.id, f.family_number, f.house_name, f.ward, f.area, f.phone, f.whatsapp_phone, " +
+                "(SELECT m.name FROM members m WHERE m.family_id=f.id AND IFNULL(m.archive_state,0)=0 AND (m.is_head=1 OR m.relationship='Head') LIMIT 1) AS head_name " +
+                "FROM families f WHERE ${where.joinToString(" AND ")} ORDER BY f.family_number ASC LIMIT ?",
+            params.toTypedArray()
+        )
+    }
+
+    fun recentReceipts(limit: Int = 40): List<Map<String, Any?>> {
+        return try {
+            db.all(
+                "SELECT 'donation' AS kind, d.id AS ref_id, d.receipt_number AS receipt, d.donor_name AS party, " +
+                    "d.amount AS amount, d.donation_date AS date, d.payment_method AS method, " +
+                    "COALESCE(c.name,'') AS category, COALESCE(f.phone,'') AS phone, COALESCE(f.whatsapp_phone,'') AS wa " +
+                    "FROM donations d LEFT JOIN donation_categories c ON c.id=d.category_id LEFT JOIN families f ON f.id=d.family_id " +
+                    "WHERE d.receipt_number IS NOT NULL AND d.receipt_number != '' " +
+                    "UNION ALL " +
+                    "SELECT 'subscription', s.id, s.receipt_number, COALESCE(NULLIF(f.house_name,''), f.family_number), " +
+                    "s.amount_paid, s.payment_date, s.payment_method, 'Subscription', COALESCE(f.phone,''), COALESCE(f.whatsapp_phone,'') " +
+                    "FROM subscriptions s LEFT JOIN families f ON f.id=s.family_id " +
+                    "WHERE s.receipt_number IS NOT NULL AND s.receipt_number != '' " +
+                    "ORDER BY date DESC LIMIT ?",
+                arrayOf(limit.toString())
+            )
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun receiptText(kind: String, refId: Long): String {
+        val s = settingsLoad()
+        val org = Format.str(s, "mahallu_name").ifBlank { "Minz Mahallu" }
+        return if (kind == "donation") {
+            val d = donationGet(refId) ?: return "Receipt not found"
+            buildString {
+                appendLine("*$org*")
+                appendLine("Donation Receipt")
+                appendLine("------------------------")
+                appendLine("Receipt : ${Format.str(d, "receipt_number")}")
+                appendLine("Date    : ${Format.str(d, "donation_date")}")
+                appendLine("Donor   : ${Format.str(d, "donor_name")}")
+                appendLine("Category: ${Format.str(d, "category_name")}")
+                appendLine("Amount  : ${Format.money(Format.num(d, "amount"))}")
+                appendLine("Method  : ${Format.str(d, "payment_method")}")
+                appendLine("------------------------")
+                appendLine("Jazakumullahu Khairan!")
+            }
+        } else {
+            val d = subscriptionGet(refId) ?: return "Receipt not found"
+            buildString {
+                appendLine("*$org*")
+                appendLine("Subscription Receipt")
+                appendLine("------------------------")
+                appendLine("Receipt : ${Format.str(d, "receipt_number")}")
+                appendLine("Date    : ${Format.str(d, "payment_date")}")
+                appendLine("Family  : ${Format.str(d, "house_name")} (${Format.str(d, "family_number")})")
+                appendLine("Amount  : ${Format.money(Format.num(d, "amount_paid"))}")
+                appendLine("Method  : ${Format.str(d, "payment_method")}")
+                appendLine("Status  : ${Format.str(d, "status")}")
+                appendLine("------------------------")
+                appendLine("Jazakumullahu Khairan!")
+            }
+        }
+    }
+
+    // ------------------------------------------------------- record actions
+
+    fun certificateSetStatus(id: Long, status: String) {
+        require(status in listOf("Issued", "Revoked", "Expired")) { "Invalid status" }
+        db.run("UPDATE certificates SET status=? WHERE id=?", arrayOf(status, id))
+        auth.audit(if (status == "Revoked") "REVOKE" else "UPDATE", "certificates", id, "Certificate $status")
+    }
+
+    fun certificateReprint(id: Long) {
+        db.run("UPDATE certificates SET reprint_count=COALESCE(reprint_count,0)+1 WHERE id=?", arrayOf(id))
+        auth.audit("REPRINT", "certificates", id, "Certificate reprinted")
+    }
+
+    fun tokenSetAmount(id: Long, amount: Double) {
+        require(amount >= 0) { "Amount cannot be negative" }
+        db.run("UPDATE tokens SET amount=? WHERE id=?", arrayOf(amount, id))
+    }
+
+    fun tokenEventDelete(id: Long) {
+        val collected = (db.scalar("SELECT COUNT(*) FROM tokens WHERE event_id=? AND status='Collected'", arrayOf(id.toString())) as? Number)?.toLong() ?: 0L
+        if (collected > 0) error("Cannot delete: $collected token(s) already collected")
+        db.transaction {
+            db.run("DELETE FROM tokens WHERE event_id=?", arrayOf(id))
+            db.run("DELETE FROM token_events WHERE id=?", arrayOf(id))
+        }
+        auth.audit("DELETE", "tokens", id, "Deleted token event")
+    }
+
+    fun backupDelete(file: File): Boolean {
+        return try {
+            val ok = file.delete()
+            try { File(file.path + "-wal").delete() } catch (_: Exception) { }
+            try { File(file.path + "-shm").delete() } catch (_: Exception) { }
+            if (ok) auth.audit("DELETE_BACKUP", "backup", null, file.name)
+            ok
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // ------------------------------------------------------- reports
+
+    fun defaultersList(): List<Map<String, Any?>> {
+        return try {
+            db.all("SELECT * FROM v_defaulters ORDER BY due_amount DESC")
+        } catch (_: Exception) {
+            db.all(
+                "SELECT f.id AS family_id, f.family_number, f.house_name, f.phone, " +
+                    "COUNT(s.id) AS pending_count, COALESCE(SUM(s.amount - s.amount_paid),0) AS due_amount " +
+                    "FROM families f LEFT JOIN subscriptions s ON s.family_id=f.id AND s.status IN ('Pending','Overdue','Partial') " +
+                    "WHERE f.status='Active' GROUP BY f.id HAVING pending_count > 0 ORDER BY due_amount DESC"
+            )
+        }
+    }
+
+    fun reportDonationsByCategory(from: String, to: String): List<Map<String, Any?>> =
+        db.all(
+            "SELECT c.name AS category, COUNT(d.id) AS count, COALESCE(SUM(d.amount),0) AS total " +
+                "FROM donation_categories c LEFT JOIN donations d ON d.category_id=c.id AND d.donation_date BETWEEN ? AND ? " +
+                "GROUP BY c.id, c.name ORDER BY total DESC",
+            arrayOf(from, to)
+        )
+
+    fun reportDonationsByMonth(months: Int = 12): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        for (i in (months - 1) downTo 0) {
+            val key = db.scalar("SELECT strftime('%Y-%m', date('now', ?))", arrayOf("-${i} months"))?.toString() ?: continue
+            val label = db.scalar("SELECT strftime('%b %Y', date('now', ?))", arrayOf("-${i} months"))?.toString() ?: key
+            val total = (db.scalar("SELECT COALESCE(SUM(amount),0) FROM donations WHERE strftime('%Y-%m',donation_date)=?", arrayOf(key)) as? Number)?.toDouble() ?: 0.0
+            val count = (db.scalar("SELECT COUNT(*) FROM donations WHERE strftime('%Y-%m',donation_date)=?", arrayOf(key)) as? Number)?.toLong() ?: 0L
+            out += mapOf("month" to label, "key" to key, "total" to total, "count" to count)
+        }
+        return out
+    }
+
+    fun reportMonthlyFinance(months: Int = 12): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        for (i in (months - 1) downTo 0) {
+            val key = db.scalar("SELECT strftime('%Y-%m', date('now', ?))", arrayOf("-${i} months"))?.toString() ?: continue
+            val label = db.scalar("SELECT strftime('%b %Y', date('now', ?))", arrayOf("-${i} months"))?.toString() ?: key
+            fun sum(sql: String) = (db.scalar(sql, arrayOf(key)) as? Number)?.toDouble() ?: 0.0
+            val income = sum("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE type='Income' AND (status IS NULL OR status!='Void') AND strftime('%Y-%m',txn_date)=?")
+            val expense = sum("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE type='Expense' AND (status IS NULL OR status!='Void') AND strftime('%Y-%m',txn_date)=?")
+            val don = sum("SELECT COALESCE(SUM(amount),0) FROM donations WHERE strftime('%Y-%m',donation_date)=?")
+            val sub = sum("SELECT COALESCE(SUM(amount_paid),0) FROM subscriptions WHERE strftime('%Y-%m',payment_date)=?")
+            out += mapOf("month" to label, "income" to income, "expense" to expense, "donations" to don, "subscriptions" to sub, "net" to (income + don + sub - expense))
+        }
+        return out
+    }
+
+    fun reportWelfareSummary(): List<Map<String, Any?>> =
+        db.all("SELECT status, COUNT(*) AS count, COALESCE(SUM(amount_requested),0) AS requested, COALESCE(SUM(amount_approved),0) AS approved FROM welfare_requests GROUP BY status ORDER BY count DESC")
+
+    fun reportCertificateLog(): List<Map<String, Any?>> =
+        db.all("SELECT certificate_number, type, issued_to, issued_date, status, verification_code FROM certificates ORDER BY issued_date DESC, id DESC LIMIT 500")
+
+    fun reportMemberRoll(): List<Map<String, Any?>> {
+        return try {
+            db.all("SELECT member_code, name, gender, mobile, status, family_number, house_name, ward FROM v_member_directory ORDER BY family_number ASC, name ASC LIMIT 2000")
+        } catch (_: Exception) {
+            db.all("SELECT m.member_code, m.name, m.gender, m.mobile, m.status, f.family_number, f.house_name, f.ward FROM members m LEFT JOIN families f ON f.id=m.family_id ORDER BY f.family_number ASC, m.name ASC LIMIT 2000")
+        }
+    }
+
+    fun reportFamilyDirectory(): List<Map<String, Any?>> =
+        db.all(
+            "SELECT f.family_number, f.house_name, f.ward, f.area, f.phone, f.status, " +
+                "(SELECT COUNT(*) FROM members m WHERE m.family_id=f.id AND IFNULL(m.archive_state,0)=0) AS members " +
+                "FROM families f ORDER BY f.family_number ASC LIMIT 2000"
+        )
+
+    fun reportCollectionRegister(from: String, to: String): List<Map<String, Any?>> =
+        db.all(
+            "SELECT s.receipt_number AS receipt, s.payment_date AS date, f.family_number AS family, f.house_name AS house, " +
+                "s.amount_paid AS amount, s.payment_method AS method, s.status AS status " +
+                "FROM subscriptions s LEFT JOIN families f ON f.id=s.family_id " +
+                "WHERE s.payment_date BETWEEN ? AND ? AND s.amount_paid > 0 ORDER BY s.payment_date DESC LIMIT 2000",
+            arrayOf(from, to)
+        )
 }
